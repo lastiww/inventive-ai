@@ -1,0 +1,183 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventive AI</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Inventive AI</h1>
+    </header>
+    <main>
+        <!-- Face with shoulders -->
+        <div class="face-container">
+            <div class="face">
+                <div class="head"></div>
+                <div class="shoulders"></div>
+            </div>
+        </div>
+    </main>
+    <footer>
+        <p>&copy; 2025 Inventive AI. All rights reserved.</p>
+    </footer>
+</body>
+</html><style>/* Global Styles */
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Arial', sans-serif;
+    background-color: #000; /* Black background */
+    color: #00ff00; /* Neon green text */
+    text-align: center;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+/* Header */
+header h1 {
+    font-size: 3rem;
+    margin: 20px 0;
+    text-shadow: 0 0 10px #00ff00, 0 0 20px #00ff00;
+}
+
+/* Input Container */
+.input-container {
+    margin: 0 auto;
+    padding: 20px;
+    max-width: 600px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+}
+
+.input-container input {
+    width: 70%;
+    padding: 15px;
+    font-size: 1rem;
+    color: #00ff00;
+    background: #222;
+    border: 2px solid #00ff00;
+    border-radius: 5px;
+    outline: none;
+    box-shadow: 0 0 10px #00ff00;
+    font-family: 'Courier New', monospace; /* Monospace font for retro feel */
+}
+
+.input-container button {
+    padding: 15px 25px;
+    font-size: 1rem;
+    color: #000;
+    background-color: #00ff00;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    box-shadow: 0 0 10px #00ff00;
+    transition: transform 0.3s;
+}
+
+.input-container button:hover {
+    transform: scale(1.1);
+}
+
+/* Response Container */
+#responseContainer {
+    margin: 20px auto;
+    max-width: 800px;
+    padding: 20px;
+    color: #00ff00;
+    font-size: 1rem;
+    text-align: left;
+    font-family: 'Courier New', monospace; /* Monospace font for retro feel */
+    white-space: pre-wrap; /* Preserve spaces and line breaks */
+}
+
+/* Animation for blinking cursor */
+@keyframes blink {
+    50% {
+        opacity: 0;
+    }
+}
+
+/* Blinking cursor style */
+span {
+    font-size: 1rem;
+    animation: blink 0.5s step-end infinite;
+    color: #ffffff; /* White cursor */
+}</style><script> // Get DOM elements
+const inputField = document.querySelector('#userInput');
+const sendButton = document.querySelector('#sendButton');
+const responseContainer = document.querySelector('#responseContainer');
+
+// Function to simulate a response
+const getResponse = async (query) => {
+    // List of fake responses
+    const simulatedResponses = [
+        "This is a simulated AI response.",
+        "I'm thinking... but this is just a test!",
+        "Your question is interesting! Here's a simulated reply.",
+        "This is how it would look when the AI replies.",
+        "Simulated response: The AI is having fun answering your question!"
+    ];
+
+    // Return a random response
+    return simulatedResponses[Math.floor(Math.random() * simulatedResponses.length)];
+};
+
+// Function to display the response letter by letter with a blinking cursor
+const typeResponse = (response) => {
+    const responseElement = document.createElement('p');
+    responseElement.style.color = '#00ff00';
+    responseElement.style.fontFamily = 'monospace';
+    responseElement.style.whiteSpace = 'pre'; // Preserve spaces and line breaks
+    responseContainer.appendChild(responseElement);
+
+    let index = 0;
+    let isCursorVisible = true;
+
+    // Add a blinking cursor
+    const cursor = document.createElement('span');
+    cursor.textContent = '_'; // The blinking cursor
+    cursor.style.color = '#ffffff';
+    cursor.style.animation = 'blink 0.5s step-end infinite';
+    responseElement.appendChild(cursor);
+
+    // Timer to display each letter one by one
+    const typingEffect = setInterval(() => {
+        if (index < response.length) {
+            responseElement.textContent = response.slice(0, index + 1); // Add the next letter
+            responseElement.appendChild(cursor); // Keep the cursor at the end
+            index++;
+        } else {
+            clearInterval(typingEffect); // Stop when all letters are displayed
+            cursor.remove(); // Remove the cursor once typing is complete
+        }
+    }, 50); // Adjust typing speed (in milliseconds)
+};
+
+// Event listener for the send button
+sendButton.addEventListener('click', async () => {
+    const userQuery = inputField.value;
+
+    if (userQuery.trim() !== '') {
+        // Show a loading message
+        const loadingMessage = document.createElement('p');
+        loadingMessage.textContent = "Thinking...";
+        loadingMessage.style.color = '#00ff00';
+        responseContainer.appendChild(loadingMessage);
+
+        // Simulate fetching a response
+        const response = await getResponse(userQuery);
+
+        // Remove the loading message and type the response
+        responseContainer.removeChild(loadingMessage);
+        typeResponse(response);
+
+        // Clear the input field
+        inputField.value = '';
+    }
+});</script>
