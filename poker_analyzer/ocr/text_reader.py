@@ -1,10 +1,24 @@
 """OCR text reader for pot, stacks, and bet amounts."""
 
+import os
 import re
+import sys
 
 import cv2
 import numpy as np
 import pytesseract
+
+# Auto-detect Tesseract path on Windows
+if sys.platform == "win32":
+    _tesseract_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Tesseract-OCR\tesseract.exe"),
+    ]
+    for _path in _tesseract_paths:
+        if os.path.isfile(_path):
+            pytesseract.pytesseract.tesseract_cmd = _path
+            break
 
 
 class TextReader:
