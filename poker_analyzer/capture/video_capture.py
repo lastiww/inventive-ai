@@ -23,8 +23,6 @@ class VideoCapture:
     def __init__(self, capture_config: CaptureConfig, window_config: WindowConfig):
         self.capture_config = capture_config
         self.window_config = window_config
-        self._debug_mode = False
-        self._debug_rois: list[tuple[tuple[int, int, int, int], str]] = []
         self._rendercolor_hwnd = None
         self._use_region_capture = False
         # Region to capture (x, y, w, h) — set from RenderColorQC position
@@ -44,25 +42,12 @@ class VideoCapture:
                 print(f"[CAPTURE] Found RenderColorQC window (hwnd={self._rendercolor_hwnd})")
             else:
                 print("[CAPTURE] RenderColorQC window not found, using region capture")
+                print(f"[CAPTURE] Region: ({self._capture_region[0]}, {self._capture_region[1]}) "
+                      f"{self._capture_region[2]}x{self._capture_region[3]}")
                 self._use_region_capture = True
         else:
             self._use_region_capture = True
 
-        # Create preview window
-        cv2.namedWindow("Poker Stream", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(
-            "Poker Stream",
-            self.window_config.capture_width,
-            self.window_config.capture_height,
-        )
-        cv2.moveWindow(
-            "Poker Stream",
-            self.window_config.capture_x,
-            self.window_config.capture_y,
-        )
-
-        rx, ry, rw, rh = self._capture_region
-        print(f"[CAPTURE] Capturing region: ({rx}, {ry}) {rw}x{rh}")
         return True
 
     def read_frame(self) -> np.ndarray | None:
@@ -73,7 +58,7 @@ class VideoCapture:
             else:
                 return self._capture_region_win32(*self._capture_region)
         else:
-            # Fallback for non-Windows (OpenCV device capture)
+            # Fallback for non-Windows
             return None
 
     def _find_window(self, title_substring: str) -> int | None:
@@ -108,7 +93,6 @@ class VideoCapture:
             windll.gdi32.SelectObject(hdc_mem, hbmp)
             windll.gdi32.BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, x, y, 0x00CC0020)  # SRCCOPY
 
-            # Read bitmap into numpy array
             class BITMAPINFOHEADER(ctypes.Structure):
                 _fields_ = [
                     ("biSize", ctypes.c_uint32),
@@ -205,43 +189,6 @@ class VideoCapture:
             print(f"[CAPTURE ERROR] {e}")
             return None
 
-    def set_debug_rois(self, rois: list[tuple[tuple[int, int, int, int], str]]):
-        """Set ROI rectangles to draw in debug mode."""
-        self._debug_rois = rois
-
-    def set_debug_mode(self, enabled: bool):
-        """Toggle debug OCR rectangle display."""
-        self._debug_mode = enabled
-        print(f"[DEBUG] OCR rectangles {'ON' if enabled else 'OFF'}")
-
-    def toggle_debug(self):
-        self.set_debug_mode(not self._debug_mode)
-
-    def show_frame(self, frame: np.ndarray):
-        """Display the frame with optional debug rectangles."""
-        display = frame.copy()
-
-        if self._debug_mode and self._debug_rois:
-            for (x, y, w, h), label in self._debug_rois:
-                cv2.rectangle(display, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(
-                    display, label,
-                    (x, y - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
-                )
-
-        cv2.imshow("Poker Stream", display)
-
-    def handle_key(self, key: int) -> str | None:
-        """Handle keyboard input."""
-        if key == ord('d') or key == ord('D'):
-            self.toggle_debug()
-            return "toggle_debug"
-        elif key == ord('q') or key == ord('Q') or key == 27:
-            return "quit"
-        return None
-
     def release(self):
-        """Close windows."""
-        cv2.destroyAllWindows()
+        """Cleanup."""
         print("[CAPTURE] Released.")

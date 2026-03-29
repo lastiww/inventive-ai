@@ -39,7 +39,7 @@ class PokerAnalyzer:
         self.range_manager = RangeManager()
         self.tracker = PlayerTracker()
         self.exploit_solver = ExploitativeSolver(config.solver, self.tracker)
-        self.overlay = OverlayDisplay(config.window)
+        self.overlay = OverlayDisplay()
 
         # State
         self._last_board_str = ""
@@ -53,32 +53,44 @@ class PokerAnalyzer:
             print("[ERROR] Failed to open capture device. Check device ID.")
             return
 
-        # Build overlay window
-        self.overlay.build()
+        # Create the single output window on the right monitor
+        window_name = "Poker GTO Analyzer"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(
+            window_name,
+            self.config.window.overlay_width,
+            self.config.window.overlay_height,
+        )
+        cv2.moveWindow(
+            window_name,
+            self.config.window.overlay_x,
+            self.config.window.overlay_y,
+        )
 
         print("[READY] Poker GTO Analyzer running.")
-        print("  D = Debug OCR | Q = Quit")
+        print("  D = Debug OCR | E = Toggle Exploit | Q = Quit")
         print(f"  Site: {self.config.site}")
         print(f"  Capture device: {self.config.capture.device_id}")
+        print(f"  Window: ({self.config.window.overlay_x}, {self.config.window.overlay_y})")
 
         try:
-            self._main_loop()
+            self._main_loop(window_name)
         except KeyboardInterrupt:
             print("\n[QUIT] Interrupted.")
         finally:
             self.capture.release()
-            self.overlay.destroy()
+            cv2.destroyAllWindows()
 
-    def _main_loop(self):
+    def _main_loop(self, window_name: str):
         """Continuous frame processing loop."""
-        frame_interval = 1.0 / 10  # Process at 10 FPS (OCR doesn't need 30fps)
-        solve_cooldown = 2.0  # Don't re-solve more often than every 2s
+        frame_interval = 1.0 / 10  # 10 FPS
+        solve_cooldown = 2.0
         last_solve_time = 0.0
 
         while True:
             loop_start = time.time()
 
-            # Read frame
+            # Read frame from RenderColorQC
             frame = self.capture.read_frame()
             if frame is None:
                 time.sleep(0.1)
@@ -87,12 +99,12 @@ class PokerAnalyzer:
             # Parse game state via OCR
             game_state = self.parser.parse_frame(frame)
 
-            # Update debug ROIs on capture window
+            # Build debug ROIs if debug mode is on
+            debug_rois = None
             if self.config.debug_ocr:
                 debug_rois = self.parser.get_debug_rois(frame)
-                self.capture.set_debug_rois(debug_rois)
 
-            # Check if game state changed (new board / pot change)
+            # Check if game state changed
             state_changed = self._detect_state_change(game_state)
 
             # Solve if state changed and enough time passed
@@ -106,40 +118,39 @@ class PokerAnalyzer:
             exploit_result = None
 
             if self._show_exploit and gto_result:
-                # Find opponent to exploit
                 opponent = self._find_opponent(game_state)
                 if opponent:
                     exploit_result = game_state.exploitative_result
 
-            # Update overlay
+            # Get opponent stats
             opponent_stats = None
             opponent = self._find_opponent(game_state)
             if opponent:
                 opponent_stats = self.tracker.get_stats(opponent)
 
-            self.overlay.update(
+            # Draw overlay on the captured frame
+            display = self.overlay.draw_overlay(
+                frame=frame,
                 game_state=game_state,
                 gto_result=gto_result,
                 exploit_result=exploit_result,
                 opponent_stats=opponent_stats,
                 is_solving=self.solver.is_solving(),
+                debug_rois=debug_rois,
             )
 
-            # Show capture frame
-            self.capture.show_frame(frame)
-
-            # Process overlay events
-            self.overlay.process_events()
+            # Show the combined frame (stream + overlay) on right monitor
+            cv2.imshow(window_name, display)
 
             # Handle keyboard
             key = cv2.waitKey(1) & 0xFF
-            action = self.capture.handle_key(key)
-
-            if action == "quit":
+            if key == ord('q') or key == ord('Q') or key == 27:
                 break
-            elif action == "toggle_debug":
+            elif key == ord('d') or key == ord('D'):
                 self.config.debug_ocr = not self.config.debug_ocr
-                self.capture.set_debug_mode(self.config.debug_ocr)
+                mode = "ON" if self.config.debug_ocr else "OFF"
+                self.overlay.set_status(f"Debug OCR: {mode}")
+                print(f"[DEBUG] OCR rectangles {mode}")
             elif key == ord('e') or key == ord('E'):
                 self._show_exploit = not self._show_exploit
                 mode = "Exploitative + GTO" if self._show_exploit else "GTO Only"
@@ -167,17 +178,14 @@ class PokerAnalyzer:
     def _trigger_solve(self, state: GameState):
         """Trigger solver for the current game state."""
         if state.street == Street.PREFLOP:
-            # Preflop: instant lookup
             result = self.solver.solve(state, "", "")
             state.gto_result = result
             return
 
-        # Postflop: need ranges based on positions
         hero = state.hero
         if hero is None or hero.position is None:
             return
 
-        # Find villain position (first active non-hero player)
         villain = None
         for p in state.active_players:
             if p != hero and p.position is not None:
@@ -187,18 +195,15 @@ class PokerAnalyzer:
         if villain is None:
             return
 
-        # Determine OOP/IP
         oop_pos, ip_pos = self._determine_oop_ip(hero, villain)
-        is_3bet = state.pot_bb > 12  # rough heuristic for 3bet pot
+        is_3bet = state.pot_bb > 12
 
         oop_range, ip_range = self.range_manager.get_ranges_for_spot(
             oop_pos, ip_pos, is_3bet_pot=is_3bet
         )
 
-        # Solve GTO (async)
         self.solver.solve_async(state, oop_range, ip_range)
 
-        # Solve exploitative if we have stats
         if villain and self._show_exploit:
             exploit_result = self.exploit_solver.solve_exploitative(
                 state, villain.name, oop_range, ip_range
@@ -234,7 +239,6 @@ class PokerAnalyzer:
         idx1 = position_order.index(pos1) if pos1 in position_order else 0
         idx2 = position_order.index(pos2) if pos2 in position_order else 0
 
-        # Lower index = earlier to act = OOP
         if idx1 < idx2:
             return pos1, pos2
         else:
@@ -260,36 +264,28 @@ def parse_args():
         help="Path to TexasSolver binary",
     )
     parser.add_argument(
-        "--overlay-x", type=int, default=1920,
-        help="Overlay window X position (default: 1920 = second monitor)",
-    )
-    parser.add_argument(
-        "--overlay-y", type=int, default=0,
-        help="Overlay window Y position",
-    )
-    parser.add_argument(
-        "--capture-x", type=int, default=0,
-        help="Capture preview window X position",
-    )
-    parser.add_argument(
-        "--capture-y", type=int, default=0,
-        help="Capture preview window Y position",
-    )
-    parser.add_argument(
-        "--width", type=int, default=960,
-        help="Window width for both windows",
-    )
-    parser.add_argument(
-        "--height", type=int, default=540,
-        help="Window height for both windows",
-    )
-    parser.add_argument(
         "--rendercolor-x", type=int, default=1920,
         help="RenderColorQC window X position (default: 1920 = second monitor)",
     )
     parser.add_argument(
         "--rendercolor-y", type=int, default=0,
         help="RenderColorQC window Y position",
+    )
+    parser.add_argument(
+        "--overlay-x", type=int, default=1920,
+        help="Output window X position (default: 1920 = on top of RenderColorQC)",
+    )
+    parser.add_argument(
+        "--overlay-y", type=int, default=0,
+        help="Output window Y position",
+    )
+    parser.add_argument(
+        "--width", type=int, default=1920,
+        help="Window width (default: 1920 = full screen)",
+    )
+    parser.add_argument(
+        "--height", type=int, default=1080,
+        help="Window height (default: 1080 = full screen)",
     )
     return parser.parse_args()
 
@@ -308,11 +304,7 @@ def main():
     config.capture.rendercolor_y = args.rendercolor_y
     config.solver.binary_path = args.solver_path
 
-    config.window.capture_x = args.capture_x
-    config.window.capture_y = args.capture_y
-    config.window.capture_width = args.width
-    config.window.capture_height = args.height
-
+    # Output window = overlay (on top of RenderColorQC, same position)
     config.window.overlay_x = args.overlay_x
     config.window.overlay_y = args.overlay_y
     config.window.overlay_width = args.width
@@ -321,13 +313,12 @@ def main():
     print("=" * 50)
     print("  POKER STREAM GTO ANALYZER")
     print("=" * 50)
-    print(f"  Site:    {config.site}")
-    print(f"  Solver:  {config.solver.binary_path}")
-    print(f"  Debug:   {config.debug_ocr}")
+    print(f"  Site:         {config.site}")
+    print(f"  Solver:       {config.solver.binary_path}")
+    print(f"  Debug:        {config.debug_ocr}")
     print(f"  RenderColorQC: ({config.capture.rendercolor_x}, {config.capture.rendercolor_y})")
-    print(f"  Capture: ({config.window.capture_x}, {config.window.capture_y})")
-    print(f"  Overlay: ({config.window.overlay_x}, {config.window.overlay_y})")
-    print(f"  Size:    {config.window.capture_width}x{config.window.capture_height}")
+    print(f"  Output:       ({config.window.overlay_x}, {config.window.overlay_y})")
+    print(f"  Size:         {args.width}x{args.height}")
     print("=" * 50)
 
     analyzer = PokerAnalyzer(config)
