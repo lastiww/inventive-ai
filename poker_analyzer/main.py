@@ -283,6 +283,14 @@ def parse_args():
         "--height", type=int, default=540,
         help="Window height for both windows",
     )
+    parser.add_argument(
+        "--rendercolor-x", type=int, default=1920,
+        help="RenderColorQC window X position (default: 1920 = second monitor)",
+    )
+    parser.add_argument(
+        "--rendercolor-y", type=int, default=0,
+        help="RenderColorQC window Y position",
+    )
     return parser.parse_args()
 
 
@@ -296,6 +304,8 @@ def main():
 
     # Apply CLI args
     config.capture.device_id = args.device
+    config.capture.rendercolor_x = args.rendercolor_x
+    config.capture.rendercolor_y = args.rendercolor_y
     config.solver.binary_path = args.solver_path
 
     config.window.capture_x = args.capture_x
@@ -312,9 +322,9 @@ def main():
     print("  POKER STREAM GTO ANALYZER")
     print("=" * 50)
     print(f"  Site:    {config.site}")
-    print(f"  Device:  {config.capture.device_id}")
     print(f"  Solver:  {config.solver.binary_path}")
     print(f"  Debug:   {config.debug_ocr}")
+    print(f"  RenderColorQC: ({config.capture.rendercolor_x}, {config.capture.rendercolor_y})")
     print(f"  Capture: ({config.window.capture_x}, {config.window.capture_y})")
     print(f"  Overlay: ({config.window.overlay_x}, {config.window.overlay_y})")
     print(f"  Size:    {config.window.capture_width}x{config.window.capture_height}")

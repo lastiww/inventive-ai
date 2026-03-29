@@ -6,10 +6,13 @@ from dataclasses import dataclass, field
 @dataclass
 class CaptureConfig:
     """Video capture settings."""
-    device_id: int = 0  # capture card device index
+    device_id: int = 0  # capture card device index (fallback)
     width: int = 1920
     height: int = 1080
     fps: int = 30
+    # RenderColorQC window position (where the stream is displayed)
+    rendercolor_x: int = 1920  # x=1920 = second monitor
+    rendercolor_y: int = 0
 
 
 @dataclass
