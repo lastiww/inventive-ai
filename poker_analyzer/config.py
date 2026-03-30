@@ -65,6 +65,10 @@ class SiteROI:
     # CoinPoker stats regions (VPIP, PFR, etc. displayed on table)
     stats_regions: list[tuple[float, float, float, float]] = field(default_factory=list)
 
+    # Player label anchor points (x, y) normalized — where to draw GTO labels
+    # Each entry is (center_x, center_y) of the player's name area
+    player_label_anchors: list[tuple[float, float]] = field(default_factory=list)
+
 
 # Winamax 6-max table ROI (approximate, needs calibration with templates)
 WINAMAX_ROI = SiteROI(
@@ -110,56 +114,67 @@ WINAMAX_ROI = SiteROI(
     ],
 )
 
-# CoinPoker 6-max table ROI (approximate, needs calibration)
+# CoinPoker 6-max table ROI — calibrated from real CoinPoker screenshot
+# Seat order: 0=SB(bottom-left), 1=BB(left), 2=top-center,
+#             3=top-right, 4=bottom-right, 5=hero(bottom-center)
 COINPOKER_ROI = SiteROI(
-    hero_card1=(0.38, 0.72, 0.04, 0.08),
-    hero_card2=(0.42, 0.72, 0.04, 0.08),
-    board_card1=(0.30, 0.38, 0.04, 0.08),
-    board_card2=(0.36, 0.38, 0.04, 0.08),
-    board_card3=(0.42, 0.38, 0.04, 0.08),
-    board_card4=(0.48, 0.38, 0.04, 0.08),
-    board_card5=(0.54, 0.38, 0.04, 0.08),
-    pot_region=(0.38, 0.32, 0.24, 0.05),
+    hero_card1=(0.33, 0.73, 0.05, 0.09),
+    hero_card2=(0.38, 0.73, 0.05, 0.09),
+    board_card1=(0.30, 0.42, 0.04, 0.08),
+    board_card2=(0.36, 0.42, 0.04, 0.08),
+    board_card3=(0.42, 0.42, 0.04, 0.08),
+    board_card4=(0.48, 0.42, 0.04, 0.08),
+    board_card5=(0.54, 0.42, 0.04, 0.08),
+    pot_region=(0.33, 0.50, 0.20, 0.04),
     stack_regions=[
-        (0.05, 0.42, 0.10, 0.04),
-        (0.05, 0.18, 0.10, 0.04),
-        (0.45, 0.05, 0.10, 0.04),
-        (0.85, 0.18, 0.10, 0.04),
-        (0.85, 0.42, 0.10, 0.04),
-        (0.38, 0.78, 0.10, 0.04),
+        (0.03, 0.68, 0.10, 0.03),   # Seat 0 — SB (GTAmoves)
+        (0.03, 0.46, 0.10, 0.03),   # Seat 1 — BB (Pimylimpy)
+        (0.30, 0.38, 0.10, 0.03),   # Seat 2 — top center (DobleZero)
+        (0.82, 0.46, 0.10, 0.03),   # Seat 3 — top right (GR3N4DI3R)
+        (0.82, 0.68, 0.10, 0.03),   # Seat 4 — bottom right (Thestral4ik)
+        (0.30, 0.83, 0.10, 0.03),   # Seat 5 — Hero (VdrNoMercy)
     ],
     name_regions=[
-        (0.05, 0.38, 0.10, 0.04),
-        (0.05, 0.14, 0.10, 0.04),
-        (0.45, 0.01, 0.10, 0.04),
-        (0.85, 0.14, 0.10, 0.04),
-        (0.85, 0.38, 0.10, 0.04),
-        (0.38, 0.74, 0.10, 0.04),
+        (0.03, 0.65, 0.10, 0.03),   # Seat 0 — SB
+        (0.03, 0.43, 0.10, 0.03),   # Seat 1 — BB
+        (0.30, 0.35, 0.10, 0.03),   # Seat 2 — top center
+        (0.82, 0.43, 0.10, 0.03),   # Seat 3 — top right
+        (0.82, 0.65, 0.10, 0.03),   # Seat 4 — bottom right
+        (0.30, 0.80, 0.10, 0.03),   # Seat 5 — Hero
     ],
     bet_regions=[
-        (0.18, 0.42, 0.08, 0.03),
-        (0.18, 0.25, 0.08, 0.03),
-        (0.45, 0.15, 0.08, 0.03),
-        (0.74, 0.25, 0.08, 0.03),
-        (0.74, 0.42, 0.08, 0.03),
-        (0.45, 0.65, 0.08, 0.03),
+        (0.17, 0.65, 0.08, 0.03),
+        (0.17, 0.46, 0.08, 0.03),
+        (0.42, 0.32, 0.08, 0.03),
+        (0.72, 0.46, 0.08, 0.03),
+        (0.72, 0.65, 0.08, 0.03),
+        (0.42, 0.75, 0.08, 0.03),
     ],
     dealer_regions=[
-        (0.16, 0.48, 0.03, 0.03),
-        (0.16, 0.22, 0.03, 0.03),
-        (0.43, 0.12, 0.03, 0.03),
-        (0.80, 0.22, 0.03, 0.03),
-        (0.80, 0.48, 0.03, 0.03),
-        (0.50, 0.70, 0.03, 0.03),
+        (0.14, 0.70, 0.02, 0.02),
+        (0.14, 0.48, 0.02, 0.02),
+        (0.42, 0.37, 0.02, 0.02),
+        (0.80, 0.48, 0.02, 0.02),
+        (0.80, 0.70, 0.02, 0.02),
+        (0.42, 0.78, 0.02, 0.02),
     ],
-    # CoinPoker displays player stats directly on the table
     stats_regions=[
-        (0.05, 0.46, 0.10, 0.06),
-        (0.05, 0.22, 0.10, 0.06),
-        (0.45, 0.09, 0.10, 0.06),
-        (0.85, 0.22, 0.10, 0.06),
-        (0.85, 0.46, 0.10, 0.06),
-        (0.38, 0.82, 0.10, 0.06),
+        (0.03, 0.71, 0.10, 0.05),
+        (0.03, 0.49, 0.10, 0.05),
+        (0.30, 0.41, 0.10, 0.05),
+        (0.82, 0.49, 0.10, 0.05),
+        (0.82, 0.71, 0.10, 0.05),
+        (0.30, 0.86, 0.10, 0.05),
+    ],
+    # Player label anchor points — where to draw COMP./GEN. labels
+    # (center_x, center_y) normalized, positioned near each player's name
+    player_label_anchors=[
+        (0.08, 0.63),   # Seat 0 — SB (GTAmoves) — label above name
+        (0.08, 0.41),   # Seat 1 — BB (Pimylimpy)
+        (0.35, 0.33),   # Seat 2 — top center (DobleZero)
+        (0.87, 0.41),   # Seat 3 — top right (GR3N4DI3R)
+        (0.87, 0.63),   # Seat 4 — bottom right (Thestral4ik)
+        (0.35, 0.78),   # Seat 5 — Hero (VdrNoMercy)
     ],
 )
 

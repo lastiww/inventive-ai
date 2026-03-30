@@ -128,6 +128,9 @@ class PokerAnalyzer:
             if opponent:
                 opponent_stats = self.tracker.get_stats(opponent)
 
+            # Get player label positions from config
+            anchors = self.config.site_roi.player_label_anchors
+
             # Draw overlay on the captured frame
             display = self.overlay.draw_overlay(
                 frame=frame,
@@ -137,6 +140,7 @@ class PokerAnalyzer:
                 opponent_stats=opponent_stats,
                 is_solving=self.solver.is_solving(),
                 debug_rois=debug_rois,
+                player_label_anchors=anchors if anchors else None,
             )
 
             # Show the combined frame (stream + overlay) on right monitor
