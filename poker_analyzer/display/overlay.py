@@ -202,6 +202,18 @@ class OverlayDisplay:
             )
             text_y += 13
 
+    def draw_player_labels_direct(
+        self,
+        frame: np.ndarray,
+        fw: int, fh: int,
+        anchors: list[tuple[float, float]],
+        state: GameState | None,
+        gto_result: SolverResult | None,
+        exploit_result: SolverResult | None,
+    ):
+        """Public method to draw player labels on a frame (used by multi-table)."""
+        self._draw_player_labels(frame, fw, fh, anchors, state, gto_result, exploit_result)
+
     def _draw_debug_rois(
         self,
         frame: np.ndarray,

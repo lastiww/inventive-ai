@@ -1,8 +1,9 @@
-"""Poker Stream GTO Analyzer — Main pipeline.
+"""Poker Stream GTO Analyzer — Main pipeline with multi-table support.
 
 Usage:
-    python -m poker_analyzer.main --device 0 --site winamax
-    python -m poker_analyzer.main --device 1 --site coinpoker --debug
+    python -m poker_analyzer.main --site coinpoker --rendercolor-x 1920
+    python -m poker_analyzer.main --site coinpoker --tables 2x3 --rendercolor-x 1920
+    python -m poker_analyzer.main --site winamax --tables 2x2 --debug
 
 Keys:
     D — Toggle debug OCR rectangles
@@ -19,41 +20,30 @@ from poker_analyzer.capture.video_capture import VideoCapture
 from poker_analyzer.config import Config
 from poker_analyzer.display.overlay import OverlayDisplay
 from poker_analyzer.models.game_state import GameState, Street
-from poker_analyzer.ocr.table_parser import TableParser
-from poker_analyzer.solver.exploitative import ExploitativeSolver
-from poker_analyzer.solver.player_tracker import PlayerTracker
+from poker_analyzer.multi_table import MultiTableManager
 from poker_analyzer.solver.range_manager import RangeManager
-from poker_analyzer.solver.texas_solver import TexasSolver
 
 
 class PokerAnalyzer:
-    """Main application — orchestrates capture → OCR → solver → display."""
+    """Main application — orchestrates capture → OCR → solver → display.
 
-    def __init__(self, config: Config):
+    Supports multi-table: splits the captured frame into a grid and
+    analyzes each table independently.
+    """
+
+    def __init__(self, config: Config, table_cols: int = 1, table_rows: int = 1):
         self.config = config
-
-        # Modules
         self.capture = VideoCapture(config.capture, config.window)
-        self.parser = TableParser(config)
-        self.solver = TexasSolver(config.solver)
-        self.range_manager = RangeManager()
-        self.tracker = PlayerTracker()
-        self.exploit_solver = ExploitativeSolver(config.solver, self.tracker)
         self.overlay = OverlayDisplay()
-
-        # State
-        self._last_board_str = ""
-        self._last_pot = 0.0
+        self.multi = MultiTableManager(config, table_cols, table_rows)
         self._show_exploit = True
 
     def run(self):
         """Main loop."""
-        # Open capture device
         if not self.capture.open():
-            print("[ERROR] Failed to open capture device. Check device ID.")
+            print("[ERROR] Failed to open capture device.")
             return
 
-        # Create the single output window on the right monitor
         window_name = "Poker GTO Analyzer"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(
@@ -68,10 +58,9 @@ class PokerAnalyzer:
         )
 
         print("[READY] Poker GTO Analyzer running.")
-        print("  D = Debug OCR | E = Toggle Exploit | Q = Quit")
+        print(f"  Tables: {self.multi.cols}x{self.multi.rows} ({self.multi.num_tables} tables)")
         print(f"  Site: {self.config.site}")
-        print(f"  Capture device: {self.config.capture.device_id}")
-        print(f"  Window: ({self.config.window.overlay_x}, {self.config.window.overlay_y})")
+        print("  D = Debug OCR | E = Toggle Exploit | Q = Quit")
 
         try:
             self._main_loop(window_name)
@@ -85,68 +74,81 @@ class PokerAnalyzer:
         """Continuous frame processing loop."""
         frame_interval = 1.0 / 10  # 10 FPS
         solve_cooldown = 2.0
-        last_solve_time = 0.0
 
         while True:
             loop_start = time.time()
 
-            # Read frame from RenderColorQC
+            # Capture full frame from RenderColorQC
             frame = self.capture.read_frame()
             if frame is None:
                 time.sleep(0.1)
                 continue
 
-            # Parse game state via OCR
-            game_state = self.parser.parse_frame(frame)
+            fh, fw = frame.shape[:2]
+            display = frame.copy()
 
-            # Build debug ROIs if debug mode is on
-            debug_rois = None
-            if self.config.debug_ocr:
-                debug_rois = self.parser.get_debug_rois(frame)
+            # Split frame into table sub-frames
+            table_frames = self.multi.split_frame(frame)
 
-            # Check if game state changed
-            state_changed = self._detect_state_change(game_state)
+            # Process each table
+            all_debug_rois = []
+            all_labels = []
 
-            # Solve if state changed and enough time passed
-            now = time.time()
-            if state_changed and (now - last_solve_time) > solve_cooldown:
-                self._trigger_solve(game_state)
-                last_solve_time = now
+            for idx, (sub_frame, off_x, off_y, tw, th) in enumerate(table_frames):
+                table = self.multi.tables[idx]
 
-            # Get solver results
-            gto_result = self.solver.get_result()
-            exploit_result = None
+                # Parse game state via OCR
+                table.game_state = table.parser.parse_frame(sub_frame)
 
-            if self._show_exploit and gto_result:
-                opponent = self._find_opponent(game_state)
-                if opponent:
-                    exploit_result = game_state.exploitative_result
+                # Debug ROIs
+                if self.config.debug_ocr:
+                    rois = self.multi.get_debug_rois_for_table(table, sub_frame, off_x, off_y)
+                    all_debug_rois.extend(rois)
 
-            # Get opponent stats
-            opponent_stats = None
-            opponent = self._find_opponent(game_state)
-            if opponent:
-                opponent_stats = self.tracker.get_stats(opponent)
+                # Check state change and solve
+                now = time.time()
+                state_changed = self._detect_state_change(table)
+                if state_changed and (now - table.last_solve_time) > solve_cooldown:
+                    self._trigger_solve(table)
+                    table.last_solve_time = now
 
-            # Get player label positions from config
-            anchors = self.config.site_roi.player_label_anchors
+                # Get results
+                table.gto_result = table.solver.get_result()
+                if self._show_exploit and table.gto_result and table.game_state:
+                    opponent = self._find_opponent(table.game_state)
+                    if opponent:
+                        table.exploit_result = table.game_state.exploitative_result
 
-            # Draw overlay on the captured frame
+                # Get label anchors for this table (converted to full-frame coords)
+                if table.gto_result or table.exploit_result:
+                    anchors = self.multi.get_label_anchors_for_table(
+                        idx, off_x, off_y, tw, th, fw, fh,
+                    )
+                    all_labels.append((anchors, table))
+
+            # Draw all overlays on the full frame
             display = self.overlay.draw_overlay(
                 frame=frame,
-                game_state=game_state,
-                gto_result=gto_result,
-                exploit_result=exploit_result,
-                opponent_stats=opponent_stats,
-                is_solving=self.solver.is_solving(),
-                debug_rois=debug_rois,
-                player_label_anchors=anchors if anchors else None,
+                game_state=None,
+                gto_result=None,
+                exploit_result=None,
+                is_solving=any(t.solver.is_solving() for t in self.multi.tables),
+                debug_rois=all_debug_rois if all_debug_rois else None,
+                player_label_anchors=None,
             )
 
-            # Show the combined frame (stream + overlay) on right monitor
+            # Draw per-table player labels
+            for anchors, table in all_labels:
+                self.overlay.draw_player_labels_direct(
+                    display, fw, fh, anchors,
+                    table.game_state,
+                    table.gto_result,
+                    table.exploit_result,
+                )
+
             cv2.imshow(window_name, display)
 
-            # Handle keyboard
+            # Keyboard
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == ord('Q') or key == 27:
                 break
@@ -157,7 +159,7 @@ class PokerAnalyzer:
                 print(f"[DEBUG] OCR rectangles {mode}")
             elif key == ord('e') or key == ord('E'):
                 self._show_exploit = not self._show_exploit
-                mode = "Exploitative + GTO" if self._show_exploit else "GTO Only"
+                mode = "EXP + GTO" if self._show_exploit else "GTO Only"
                 self.overlay.set_status(f"Mode: {mode}")
                 print(f"[MODE] {mode}")
 
@@ -167,22 +169,27 @@ class PokerAnalyzer:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-    def _detect_state_change(self, state: GameState) -> bool:
-        """Detect if the game state has meaningfully changed."""
+    def _detect_state_change(self, table) -> bool:
+        """Detect if a table's state has changed."""
+        state = table.game_state
+        if state is None:
+            return False
+
         board_str = state.board_str
         pot = state.pot_bb
-
-        changed = (board_str != self._last_board_str) or (abs(pot - self._last_pot) > 0.5)
-
-        self._last_board_str = board_str
-        self._last_pot = pot
-
+        changed = (board_str != table.last_board_str) or (abs(pot - table.last_pot) > 0.5)
+        table.last_board_str = board_str
+        table.last_pot = pot
         return changed
 
-    def _trigger_solve(self, state: GameState):
-        """Trigger solver for the current game state."""
+    def _trigger_solve(self, table):
+        """Trigger solver for a specific table."""
+        state = table.game_state
+        if state is None:
+            return
+
         if state.street == Street.PREFLOP:
-            result = self.solver.solve(state, "", "")
+            result = table.solver.solve(state, "", "")
             state.gto_result = result
             return
 
@@ -195,58 +202,46 @@ class PokerAnalyzer:
             if p != hero and p.position is not None:
                 villain = p
                 break
-
         if villain is None:
             return
 
         oop_pos, ip_pos = self._determine_oop_ip(hero, villain)
         is_3bet = state.pot_bb > 12
-
-        oop_range, ip_range = self.range_manager.get_ranges_for_spot(
-            oop_pos, ip_pos, is_3bet_pot=is_3bet
+        oop_range, ip_range = table.range_manager.get_ranges_for_spot(
+            oop_pos, ip_pos, is_3bet_pot=is_3bet,
         )
+        table.solver.solve_async(state, oop_range, ip_range)
 
-        self.solver.solve_async(state, oop_range, ip_range)
-
-        if villain and self._show_exploit:
-            exploit_result = self.exploit_solver.solve_exploitative(
-                state, villain.name, oop_range, ip_range
+        if self._show_exploit:
+            exploit_result = table.exploit_solver.solve_exploitative(
+                state, villain.name, oop_range, ip_range,
             )
             state.exploitative_result = exploit_result
 
     def _find_opponent(self, state: GameState) -> str | None:
-        """Find the main opponent's name."""
         hero = state.hero
         if hero is None:
             return None
-
         for p in state.active_players:
             if p != hero and p.is_active:
                 return p.name
         return None
 
     def _determine_oop_ip(self, player1, player2):
-        """Determine who is OOP and IP based on positions."""
         from poker_analyzer.models.game_state import Position
-
         position_order = [
             Position.SB, Position.BB, Position.UTG,
             Position.MP, Position.CO, Position.BTN,
         ]
-
         pos1 = player1.position
         pos2 = player2.position
-
         if pos1 is None or pos2 is None:
             return pos1 or Position.BB, pos2 or Position.CO
-
         idx1 = position_order.index(pos1) if pos1 in position_order else 0
         idx2 = position_order.index(pos2) if pos2 in position_order else 0
-
         if idx1 < idx2:
             return pos1, pos2
-        else:
-            return pos2, pos1
+        return pos2, pos1
 
 
 def parse_args():
@@ -257,7 +252,11 @@ def parse_args():
     )
     parser.add_argument(
         "--site", choices=["winamax", "coinpoker"], default="winamax",
-        help="Poker site to analyze (default: winamax)",
+        help="Poker site (default: winamax)",
+    )
+    parser.add_argument(
+        "--tables", type=str, default="1x1",
+        help="Table layout: COLSxROWS (e.g., 1x1, 2x2, 2x3, 3x2). Default: 1x1",
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -269,7 +268,7 @@ def parse_args():
     )
     parser.add_argument(
         "--rendercolor-x", type=int, default=1920,
-        help="RenderColorQC window X position (default: 1920 = second monitor)",
+        help="RenderColorQC window X position (default: 1920)",
     )
     parser.add_argument(
         "--rendercolor-y", type=int, default=0,
@@ -277,7 +276,7 @@ def parse_args():
     )
     parser.add_argument(
         "--overlay-x", type=int, default=1920,
-        help="Output window X position (default: 1920 = on top of RenderColorQC)",
+        help="Output window X position (default: 1920)",
     )
     parser.add_argument(
         "--overlay-y", type=int, default=0,
@@ -285,11 +284,11 @@ def parse_args():
     )
     parser.add_argument(
         "--width", type=int, default=1920,
-        help="Window width (default: 1920 = full screen)",
+        help="Window width (default: 1920)",
     )
     parser.add_argument(
         "--height", type=int, default=1080,
-        help="Window height (default: 1080 = full screen)",
+        help="Window height (default: 1080)",
     )
     return parser.parse_args()
 
@@ -297,35 +296,39 @@ def parse_args():
 def main():
     args = parse_args()
 
-    config = Config(
-        site=args.site,
-        debug_ocr=args.debug,
-    )
+    # Parse table grid
+    try:
+        cols, rows = args.tables.lower().split("x")
+        cols, rows = int(cols), int(rows)
+    except ValueError:
+        print(f"[ERROR] Invalid --tables format '{args.tables}'. Use COLSxROWS (e.g., 2x3)")
+        return
 
-    # Apply CLI args
+    config = Config(site=args.site, debug_ocr=args.debug)
     config.capture.device_id = args.device
     config.capture.rendercolor_x = args.rendercolor_x
     config.capture.rendercolor_y = args.rendercolor_y
     config.solver.binary_path = args.solver_path
-
-    # Output window = overlay (on top of RenderColorQC, same position)
     config.window.overlay_x = args.overlay_x
     config.window.overlay_y = args.overlay_y
     config.window.overlay_width = args.width
     config.window.overlay_height = args.height
 
+    num_tables = cols * rows
+
     print("=" * 50)
     print("  POKER STREAM GTO ANALYZER")
     print("=" * 50)
-    print(f"  Site:         {config.site}")
-    print(f"  Solver:       {config.solver.binary_path}")
-    print(f"  Debug:        {config.debug_ocr}")
+    print(f"  Site:          {config.site}")
+    print(f"  Tables:        {cols}x{rows} = {num_tables} tables")
+    print(f"  Solver:        {config.solver.binary_path}")
+    print(f"  Debug:         {config.debug_ocr}")
     print(f"  RenderColorQC: ({config.capture.rendercolor_x}, {config.capture.rendercolor_y})")
-    print(f"  Output:       ({config.window.overlay_x}, {config.window.overlay_y})")
-    print(f"  Size:         {args.width}x{args.height}")
+    print(f"  Output:        ({config.window.overlay_x}, {config.window.overlay_y})")
+    print(f"  Size:          {args.width}x{args.height}")
     print("=" * 50)
 
-    analyzer = PokerAnalyzer(config)
+    analyzer = PokerAnalyzer(config, cols, rows)
     analyzer.run()
 
 
