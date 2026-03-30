@@ -1,14 +1,11 @@
 """Poker Stream GTO Analyzer — Main pipeline.
 
-Captures the screen region where RenderColorQC renders the stream,
-analyzes each detected poker table, and draws overlay labels.
+Reads the screen region where RenderColorQC renders (for OCR),
+and draws a transparent overlay with GTO labels on top.
+No separate display window — just labels floating over the stream.
 """
 
-import argparse
 import time
-
-import cv2
-import numpy as np
 
 from poker_analyzer.capture.video_capture import VideoCapture
 from poker_analyzer.config import Config
@@ -18,69 +15,68 @@ from poker_analyzer.multi_table import MultiTableManager
 
 
 class PokerAnalyzer:
-    """Main application — capture → OCR → solver → overlay."""
+    """Main application — OCR analysis + transparent overlay."""
 
     def __init__(self, config: Config, table_cols: int = 1, table_rows: int = 1):
         self.config = config
         self.capture = VideoCapture(config.capture, config.window)
-        self.overlay = OverlayDisplay()
         self.multi = MultiTableManager(config, table_cols, table_rows)
         self._show_exploit = True
         self._stop_flag = False
+        self._overlay: OverlayDisplay | None = None
 
     def run(self):
         """Main loop."""
         if not self.capture.open():
-            print("[ERROR] Failed to open capture.")
+            print("[ERROR] Failed to initialize capture.")
             return
 
-        window_name = "Poker GTO Analyzer"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(
-            window_name,
-            self.config.window.overlay_width,
-            self.config.window.overlay_height,
+        # Create transparent overlay on top of RenderColorQC
+        self._overlay = OverlayDisplay(
+            x=self.config.window.overlay_x,
+            y=self.config.window.overlay_y,
+            width=self.config.window.overlay_width,
+            height=self.config.window.overlay_height,
         )
-        cv2.moveWindow(
-            window_name,
-            self.config.window.overlay_x,
-            self.config.window.overlay_y,
-        )
+        self._overlay.build()
 
-        print("[READY] Analyzer running.")
+        print("[READY] Overlay active — analyzing RenderColorQC stream.")
 
         try:
-            self._main_loop(window_name)
+            self._main_loop()
         except KeyboardInterrupt:
             pass
         finally:
             self.capture.release()
-            cv2.destroyAllWindows()
+            if self._overlay:
+                self._overlay.destroy()
 
-    def _main_loop(self, window_name: str):
+    def _main_loop(self):
         frame_interval = 1.0 / 10  # 10 FPS
         solve_cooldown = 2.0
 
         while not self._stop_flag:
             loop_start = time.time()
 
+            # Read screen region for OCR (not displayed)
             frame = self.capture.read_frame()
             if frame is None:
+                if self._overlay:
+                    self._overlay.process_events()
                 time.sleep(0.1)
                 continue
 
             fh, fw = frame.shape[:2]
 
-            # Split into tables
+            # Split into table sub-frames
             table_frames = self.multi.split_frame(frame)
 
             all_debug_rois = []
-            all_labels = []
 
             for idx, (sub_frame, off_x, off_y, tw, th) in enumerate(table_frames):
                 table = self.multi.tables[idx]
 
-                # Parse game state
+                # OCR parse
                 table.game_state = table.parser.parse_frame(sub_frame)
 
                 # Debug ROIs
@@ -88,7 +84,7 @@ class PokerAnalyzer:
                     rois = self.multi.get_debug_rois_for_table(table, sub_frame, off_x, off_y)
                     all_debug_rois.extend(rois)
 
-                # Solve if state changed
+                # Solve
                 now = time.time()
                 if self._detect_state_change(table) and (now - table.last_solve_time) > solve_cooldown:
                     self._trigger_solve(table)
@@ -101,37 +97,24 @@ class PokerAnalyzer:
                     if opponent:
                         table.exploit_result = table.game_state.exploitative_result
 
-                # Anchors
-                if table.gto_result or table.exploit_result:
+                # Update overlay labels for this table
+                if self._overlay:
                     anchors = self.multi.get_label_anchors_for_table(
                         idx, off_x, off_y, tw, th, fw, fh,
                     )
-                    all_labels.append((anchors, table))
+                    self._overlay.update_labels(
+                        anchors,
+                        table.game_state,
+                        table.gto_result,
+                        table.exploit_result if self._show_exploit else None,
+                    )
 
-            # Draw overlay
-            display = self.overlay.draw_overlay(
-                frame=frame,
-                debug_rois=all_debug_rois if all_debug_rois else None,
-                is_solving=any(t.solver.is_solving() for t in self.multi.tables),
-            )
+            # Update debug rectangles
+            if self._overlay:
+                self._overlay.update_debug_rois(all_debug_rois if self.config.debug_ocr else None)
+                self._overlay.process_events()
 
-            for anchors, table in all_labels:
-                self.overlay.draw_player_labels_direct(
-                    display, fw, fh, anchors,
-                    table.game_state, table.gto_result, table.exploit_result,
-                )
-
-            cv2.imshow(window_name, display)
-
-            # Keyboard (also works from OpenCV window)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == ord('Q') or key == 27:
-                break
-            elif key == ord('d') or key == ord('D'):
-                self.config.debug_ocr = not self.config.debug_ocr
-            elif key == ord('e') or key == ord('E'):
-                self._show_exploit = not self._show_exploit
-
+            # Frame rate control
             elapsed = time.time() - loop_start
             if frame_interval - elapsed > 0:
                 time.sleep(frame_interval - elapsed)
@@ -170,14 +153,11 @@ class PokerAnalyzer:
             return
 
         from poker_analyzer.models.game_state import Position
-        position_order = [
-            Position.SB, Position.BB, Position.UTG,
-            Position.MP, Position.CO, Position.BTN,
-        ]
+        order = [Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN]
         pos1, pos2 = hero.position, villain.position
         if pos1 and pos2:
-            i1 = position_order.index(pos1) if pos1 in position_order else 0
-            i2 = position_order.index(pos2) if pos2 in position_order else 0
+            i1 = order.index(pos1) if pos1 in order else 0
+            i2 = order.index(pos2) if pos2 in order else 0
             oop, ip = (pos1, pos2) if i1 < i2 else (pos2, pos1)
         else:
             oop, ip = Position.BB, Position.CO
@@ -202,10 +182,11 @@ class PokerAnalyzer:
         return None
 
 
-def parse_args():
+def main():
+    """CLI entry point."""
+    import argparse
     parser = argparse.ArgumentParser(description="Poker Stream GTO Analyzer")
-    parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--site", choices=["winamax", "coinpoker"], default="winamax")
+    parser.add_argument("--site", choices=["winamax", "coinpoker"], default="coinpoker")
     parser.add_argument("--tables", type=str, default="1x1")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--solver-path", type=str, default="./TexasSolver")
@@ -213,20 +194,15 @@ def parse_args():
     parser.add_argument("--rendercolor-y", type=int, default=0)
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
+    args = parser.parse_args()
 
     try:
-        cols, rows = args.tables.lower().split("x")
+        cols, rows = args.tables.split("x")
         cols, rows = int(cols), int(rows)
     except ValueError:
         cols, rows = 1, 1
 
     config = Config(site=args.site, debug_ocr=args.debug)
-    config.capture.device_id = args.device
     config.capture.rendercolor_x = args.rendercolor_x
     config.capture.rendercolor_y = args.rendercolor_y
     config.capture.width = args.width
@@ -236,15 +212,6 @@ def main():
     config.window.overlay_y = args.rendercolor_y
     config.window.overlay_width = args.width
     config.window.overlay_height = args.height
-
-    print("=" * 50)
-    print("  POKER GTO ANALYZER")
-    print("=" * 50)
-    print(f"  Site:     {config.site}")
-    print(f"  Tables:   {cols}x{rows}")
-    print(f"  Capture:  ({config.capture.rendercolor_x}, {config.capture.rendercolor_y})")
-    print(f"  Size:     {args.width}x{args.height}")
-    print("=" * 50)
 
     analyzer = PokerAnalyzer(config, cols, rows)
     analyzer.run()
