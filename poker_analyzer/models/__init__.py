@@ -1,1 +1,2 @@
-from .game_state import Card, Player, GameState, Action, Street, Position, HandRange
+"""Models module — data classes for game state."""
+from poker_analyzer.models.game_state import *  # noqa
