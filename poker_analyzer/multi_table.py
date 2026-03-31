@@ -9,6 +9,7 @@ import numpy as np
 
 from poker_analyzer.config import Config
 from poker_analyzer.models.game_state import GameState, SolverResult, Street
+from poker_analyzer.ocr.table_detector import detect_tables
 from poker_analyzer.ocr.table_parser import TableParser
 from poker_analyzer.solver.exploitative import ExploitativeSolver
 from poker_analyzer.solver.player_tracker import PlayerTracker
@@ -50,61 +51,15 @@ class MultiTableManager:
         self.tables: list[TableInstance] = []
         self._last_regions: list[tuple[int, int, int, int]] = []
 
-    def detect_tables(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+    def detect_tables_in_frame(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Detect poker table regions in the frame.
 
-        Looks for large green/teal areas (poker felt color).
+        Delegates to table_detector module.
 
         Returns:
             List of (x, y, w, h) bounding boxes for each detected table.
         """
-        fh, fw = frame.shape[:2]
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        # CoinPoker felt is green/teal
-        # Winamax felt is darker green
-        lower_green = np.array([35, 40, 40])
-        upper_green = np.array([85, 255, 255])
-        mask = cv2.inRange(hsv, lower_green, upper_green)
-
-        # Clean up mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Filter by minimum area (at least 5% of frame = a real table)
-        min_area = fh * fw * 0.03
-        regions = []
-
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < min_area:
-                continue
-
-            x, y, w, h = cv2.boundingRect(contour)
-
-            # Expand bounding box to include players around the table
-            # Players sit around the felt, so extend by ~30% in each direction
-            expand_x = int(w * 0.25)
-            expand_y = int(h * 0.40)  # more vertical expansion for players above/below
-
-            x = max(0, x - expand_x)
-            y = max(0, y - expand_y)
-            w = min(fw - x, w + expand_x * 2)
-            h = min(fh - y, h + expand_y * 2)
-
-            regions.append((x, y, w, h))
-
-        # Sort by position (top-left to bottom-right)
-        regions.sort(key=lambda r: (r[1] // (fh // 3), r[0]))
-
-        # Limit to max tables
-        regions = regions[:self.max_tables]
-
-        return regions
+        return detect_tables(frame, max_tables=self.max_tables)
 
     def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
         """Detect tables and return sub-frames with their TableInstances.
@@ -112,7 +67,7 @@ class MultiTableManager:
         Returns:
             List of (sub_frame, table_instance) for each detected table.
         """
-        regions = self.detect_tables(frame)
+        regions = self.detect_tables_in_frame(frame)
 
         # If no tables detected, keep using last known regions
         if not regions and self._last_regions:

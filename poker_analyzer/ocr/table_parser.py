@@ -13,6 +13,7 @@ from poker_analyzer.ocr.text_reader import TextReader
 
 # Position mapping for 6-max by seat index relative to dealer
 POSITIONS_6MAX = [Position.SB, Position.BB, Position.UTG, Position.MP, Position.CO, Position.BTN]
+POSITIONS_HU = [Position.SB, Position.BB]
 
 
 class TableParser:
@@ -24,6 +25,36 @@ class TableParser:
         self.card_detector = CardDetector(site=config.site)
         self.text_reader = TextReader()
         self._last_state: GameState | None = None
+        self._num_players_detected: int = 6
+
+    def _auto_select_roi(self, frame: np.ndarray):
+        """Auto-detect HU vs 6-max by checking if seats have visible stacks.
+
+        Tries the 6-max ROI first. If only 2 seats have content,
+        switches to HU ROI for better alignment.
+        """
+        full_roi = self.config.site_roi  # 6-max default
+        fh, fw = frame.shape[:2]
+        active_count = 0
+
+        for region in full_roi.stack_regions:
+            rx, ry, rw, rh = region
+            x, y = int(rx * fw), int(ry * fh)
+            w, h = int(rw * fw), int(rh * fh)
+            roi_img = frame[max(0, y):y + h, max(0, x):x + w]
+            if roi_img.size == 0:
+                continue
+            # A seat with a player has brighter pixels (text/avatar)
+            gray = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
+            if gray.mean() > 40:  # not just dark background
+                active_count += 1
+
+        if active_count <= 2:
+            self.roi = self.config.get_roi_for_players(2)
+            self._num_players_detected = 2
+        else:
+            self.roi = self.config.get_roi_for_players(active_count)
+            self._num_players_detected = active_count
 
     def parse_frame(self, frame: np.ndarray) -> GameState:
         """Parse a single frame into a complete GameState.
@@ -34,6 +65,9 @@ class TableParser:
         Returns:
             Parsed GameState with all detected information.
         """
+        # Auto-detect HU vs 6-max
+        self._auto_select_roi(frame)
+
         state = GameState(site=self.config.site)
 
         # Detect board cards
@@ -198,13 +232,13 @@ class TableParser:
         if n == 0:
             return
 
+        positions = POSITIONS_HU if n <= 2 else POSITIONS_6MAX
+
         for i, player in enumerate(players):
-            # Offset from dealer
             offset = (i - dealer_seat) % n
-            if offset < len(POSITIONS_6MAX):
-                # BTN is offset 0, SB is offset 1, etc.
-                pos_index = (offset - 1) % len(POSITIONS_6MAX)
-                player.position = POSITIONS_6MAX[pos_index]
+            if offset < len(positions):
+                pos_index = (offset - 1) % len(positions)
+                player.position = positions[pos_index]
                 player.is_dealer = (i == dealer_seat)
 
     def _read_coinpoker_stats(self, frame: np.ndarray, players: list[Player]):
