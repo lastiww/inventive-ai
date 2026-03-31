@@ -1,15 +1,16 @@
-"""Multi-table manager — auto-detects poker tables in the captured frame.
+"""Multi-table manager — detects poker tables in the captured frame.
 
-Detects tables by finding large green (poker felt) regions.
-Each detected table gets its own OCR parser, solver state, and overlay labels.
+Uses the FULL frame for OCR (no sub-frame cropping).
+Table detection only runs every N seconds to avoid lag.
 """
+
+import time
 
 import cv2
 import numpy as np
 
 from poker_analyzer.config import Config
 from poker_analyzer.models.game_state import GameState, SolverResult, Street
-from poker_analyzer.ocr.table_detector import detect_tables
 from poker_analyzer.ocr.table_parser import TableParser
 from poker_analyzer.solver.exploitative import ExploitativeSolver
 from poker_analyzer.solver.player_tracker import PlayerTracker
@@ -35,102 +36,79 @@ class TableInstance:
         self.last_pot: float = 0.0
         self.last_solve_time: float = 0.0
 
-        # Table region in the full frame (x, y, w, h)
-        self.region: tuple[int, int, int, int] = (0, 0, 0, 0)
-
 
 class MultiTableManager:
-    """Auto-detects and manages multiple poker tables.
-
-    Finds poker tables by detecting large green (felt) regions in the frame.
-    """
+    """Manages poker table(s) — uses full frame, no cropping."""
 
     def __init__(self, config: Config, max_tables: int = 6):
         self.config = config
         self.max_tables = max_tables
         self.tables: list[TableInstance] = []
-        self._last_regions: list[tuple[int, int, int, int]] = []
+        self._table_count: int = 1
+        self._last_detect_time: float = 0.0
+        self._detect_interval: float = 3.0  # re-detect every 3 seconds
 
-    def detect_tables_in_frame(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
-        """Detect poker table regions in the frame.
-
-        Delegates to table_detector module.
-
-        Returns:
-            List of (x, y, w, h) bounding boxes for each detected table.
-        """
-        return detect_tables(frame, max_tables=self.max_tables)
+        # Always create at least 1 table
+        self.tables.append(TableInstance(0, config))
 
     def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
-        """Detect tables and return sub-frames with their TableInstances.
+        """Return full frame paired with table instances.
 
-        Returns:
-            List of (sub_frame, table_instance) for each detected table.
+        No sub-frame extraction — the full frame is used directly.
+        Table count is re-evaluated periodically (every 3 seconds).
         """
-        regions = self.detect_tables_in_frame(frame)
+        now = time.time()
 
-        # If no tables detected, keep using last known regions
-        if not regions and self._last_regions:
-            regions = self._last_regions
-        elif regions:
-            self._last_regions = regions
+        # Re-detect table count periodically (not every frame)
+        if now - self._last_detect_time > self._detect_interval:
+            self._last_detect_time = now
+            count = self._count_tables(frame)
+            if count != self._table_count:
+                self._table_count = count
+                # Ensure enough table instances
+                while len(self.tables) < count:
+                    self.tables.append(TableInstance(len(self.tables), self.config))
 
-        # Ensure we have enough TableInstance objects
-        while len(self.tables) < len(regions):
-            self.tables.append(TableInstance(len(self.tables), self.config))
-
+        # For now: single table = full frame
+        # (multi-table tiling will be added later)
         results = []
-        for i, (x, y, w, h) in enumerate(regions):
-            table = self.tables[i]
-            table.region = (x, y, w, h)
-
-            # Extract sub-frame for this table
-            sub = frame[y:y + h, x:x + w]
-            results.append((sub, table))
+        for i in range(min(self._table_count, len(self.tables))):
+            results.append((frame, self.tables[i]))
 
         return results
 
-    def get_label_anchors_for_table(
-        self,
-        table: TableInstance,
-        frame_w: int,
-        frame_h: int,
-    ) -> list[tuple[float, float]]:
-        """Get overlay label anchors in full-frame normalized coords."""
-        anchors = self.config.site_roi.player_label_anchors
-        if not anchors:
+    def _count_tables(self, frame: np.ndarray) -> int:
+        """Count how many poker tables are visible via green felt detection."""
+        fh, fw = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        lower = np.array([30, 50, 50])
+        upper = np.array([85, 255, 255])
+        mask = cv2.inRange(hsv, lower, upper)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_area = fh * fw * 0.03
+        count = 0
+        for cnt in contours:
+            if cv2.contourArea(cnt) >= min_area:
+                x, y, w, h = cv2.boundingRect(cnt)
+                ratio = w / max(h, 1)
+                if 1.2 < ratio < 4.0:
+                    count += 1
+
+        return max(count, 1)
+
+    def get_label_anchors(self) -> list[tuple[float, float]]:
+        """Get overlay label anchors (normalized 0-1, full frame)."""
+        return self.config.site_roi.player_label_anchors
+
+    def get_debug_rois(self, frame: np.ndarray) -> list[tuple[tuple[int, int, int, int], str]]:
+        """Get debug ROI rectangles in pixel coordinates for the full frame."""
+        if not self.tables:
             return []
-
-        x, y, w, h = table.region
-        full_anchors = []
-        for ax, ay in anchors:
-            abs_x = x + ax * w
-            abs_y = y + ay * h
-            full_anchors.append((abs_x / frame_w, abs_y / frame_h))
-
-        return full_anchors
-
-    def get_debug_rois_for_table(
-        self,
-        table: TableInstance,
-        sub_frame: np.ndarray,
-    ) -> list[tuple[tuple[int, int, int, int], str]]:
-        """Get debug ROIs offset to full-frame coordinates."""
-        local_rois = table.parser.get_debug_rois(sub_frame)
-        ox, oy, _, _ = table.region
-        tid = table.table_id + 1
-
-        result = []
-        for (rx, ry, rw, rh), label in local_rois:
-            result.append(((rx + ox, ry + oy, rw, rh), f"T{tid} {label}"))
-
-        return result
-
-    def get_table_border_rois(self) -> list[tuple[tuple[int, int, int, int], str]]:
-        """Get bounding box ROIs for detected tables (for debug display)."""
-        rois = []
-        for table in self.tables:
-            x, y, w, h = table.region
-            if w > 0 and h > 0:
-                rois.append(((x, y, w, h), f"TABLE {table.table_id + 1}"))
-        return rois
+        return self.tables[0].parser.get_debug_rois(frame)

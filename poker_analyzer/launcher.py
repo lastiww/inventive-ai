@@ -313,20 +313,11 @@ class LauncherWindow:
 
         fh, fw = frame.shape[:2]
 
-        # Auto-detect tables in the frame
+        # Use full frame (no sub-frame cropping)
         detected = analyzer.multi.update_tables(frame)
-        all_debug_rois = []
 
-        # Show table borders in debug mode
-        if analyzer.config.debug_ocr:
-            all_debug_rois.extend(analyzer.multi.get_table_border_rois())
-
-        for sub_frame, table in detected:
-            table.game_state = table.parser.parse_frame(sub_frame)
-
-            if analyzer.config.debug_ocr:
-                rois = analyzer.multi.get_debug_rois_for_table(table, sub_frame)
-                all_debug_rois.extend(rois)
+        for full_frame, table in detected:
+            table.game_state = table.parser.parse_frame(full_frame)
 
             now = time.time()
             if analyzer._detect_state_change(table) and (now - table.last_solve_time) > 2.0:
@@ -341,18 +332,20 @@ class LauncherWindow:
 
             # Update overlay labels
             if analyzer._overlay:
-                anchors = analyzer.multi.get_label_anchors_for_table(
-                    table, fw, fh,
-                )
+                anchors = analyzer.multi.get_label_anchors()
                 analyzer._overlay.update_labels(
                     anchors, table.game_state,
                     table.gto_result,
                     table.exploit_result if analyzer._show_exploit else None,
                 )
 
-        # Debug rects
+        # Debug rects — only on full frame
         if analyzer._overlay:
-            analyzer._overlay.update_debug_rois(all_debug_rois if analyzer.config.debug_ocr else None)
+            if analyzer.config.debug_ocr:
+                rois = analyzer.multi.get_debug_rois(frame)
+                analyzer._overlay.update_debug_rois(rois)
+            else:
+                analyzer._overlay.update_debug_rois(None)
 
     def _toggle_debug(self):
         self.debug_var.set(not self.debug_var.get())

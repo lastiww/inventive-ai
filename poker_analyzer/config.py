@@ -114,121 +114,123 @@ WINAMAX_ROI = SiteROI(
     ],
 )
 
-# CoinPoker 6-max table ROI — calibrated from real CoinPoker screenshot
-# Coordinates are normalized relative to the DETECTED TABLE bounding box
-# (tight around the felt + small margin), NOT the full screen.
+# CoinPoker 6-max table ROI — calibrated from real CoinPoker screenshot.
+# ALL coordinates are normalized (0-1) relative to the FULL captured frame
+# (the entire CoinPoker window as rendered by RenderColorQC at 1920x1080).
 #
-# CoinPoker 6-max layout (as seen on screen):
-#   Seat 0 = bottom-left (SB)    Seat 3 = top-right
-#   Seat 1 = left (BB)           Seat 4 = bottom-right
-#   Seat 2 = top-center          Seat 5 = hero (bottom-center)
+# CoinPoker 6-max seat layout:
+#   Seat 1 = top-left (AmplifierofT)   Seat 3 = top-right (ZedsDead)
+#   Seat 2 = top-center (aphro)
+#   Seat 0 = bottom-left (GoblinBarrel) Seat 4 = bottom-right (PlayboysPoker)
+#   Seat 5 = hero bottom-center (CraZyjaZe17)
 #
-# Reference screenshot dimensions inside detected box: ~620x430 px
-# The felt oval sits roughly in the center 80% of the box.
+# Measured from screenshot: window ~590px wide, ~450px tall within 1920x1080
+# CoinPoker window starts at roughly x=260, y=170 within the capture.
+# All positions below are relative to the CoinPoker window area.
 COINPOKER_ROI = SiteROI(
-    # Hero hole cards — bottom center, face-up
-    hero_card1=(0.37, 0.78, 0.05, 0.10),
-    hero_card2=(0.43, 0.78, 0.05, 0.10),
-    # Board cards — center of felt
-    board_card1=(0.30, 0.40, 0.05, 0.10),
-    board_card2=(0.37, 0.40, 0.05, 0.10),
-    board_card3=(0.44, 0.40, 0.05, 0.10),
-    board_card4=(0.51, 0.40, 0.05, 0.10),
-    board_card5=(0.58, 0.40, 0.05, 0.10),
-    # Pot text — just below board cards
-    pot_region=(0.35, 0.53, 0.22, 0.05),
-    # Player stack (chip count) regions
+    # Hero hole cards — bottom center
+    hero_card1=(0.42, 0.72, 0.04, 0.08),
+    hero_card2=(0.47, 0.72, 0.04, 0.08),
+    # Board cards — center of felt, horizontal row
+    board_card1=(0.37, 0.48, 0.035, 0.07),
+    board_card2=(0.41, 0.48, 0.035, 0.07),
+    board_card3=(0.45, 0.48, 0.035, 0.07),
+    board_card4=(0.49, 0.48, 0.035, 0.07),
+    board_card5=(0.53, 0.48, 0.035, 0.07),
+    # Pot text — just below board center
+    pot_region=(0.42, 0.42, 0.14, 0.04),
+    # Player stack (chip count) regions — numbers below player name
     stack_regions=[
-        (0.10, 0.68, 0.12, 0.04),   # Seat 0 — bottom-left (SB)
-        (0.04, 0.42, 0.12, 0.04),   # Seat 1 — left (BB)
-        (0.38, 0.08, 0.12, 0.04),   # Seat 2 — top center
-        (0.78, 0.42, 0.12, 0.04),   # Seat 3 — top right
-        (0.78, 0.68, 0.12, 0.04),   # Seat 4 — bottom right
-        (0.38, 0.90, 0.12, 0.04),   # Seat 5 — Hero
+        (0.27, 0.60, 0.10, 0.03),   # Seat 0 — bottom-left (GoblinBarrel)
+        (0.27, 0.38, 0.10, 0.03),   # Seat 1 — top-left (AmplifierofT)
+        (0.46, 0.24, 0.10, 0.03),   # Seat 2 — top-center (aphro)
+        (0.64, 0.38, 0.10, 0.03),   # Seat 3 — top-right (ZedsDead)
+        (0.64, 0.60, 0.10, 0.03),   # Seat 4 — bottom-right (PlayboysPoker)
+        (0.46, 0.82, 0.10, 0.03),   # Seat 5 — Hero (CraZyjaZe17)
     ],
-    # Player name regions (just above stack)
+    # Player name regions — name text
     name_regions=[
-        (0.10, 0.64, 0.12, 0.04),   # Seat 0
-        (0.04, 0.38, 0.12, 0.04),   # Seat 1
-        (0.38, 0.04, 0.12, 0.04),   # Seat 2
-        (0.78, 0.38, 0.12, 0.04),   # Seat 3
-        (0.78, 0.64, 0.12, 0.04),   # Seat 4
-        (0.38, 0.86, 0.12, 0.04),   # Seat 5
+        (0.26, 0.57, 0.10, 0.03),   # Seat 0
+        (0.26, 0.35, 0.10, 0.03),   # Seat 1
+        (0.45, 0.21, 0.10, 0.03),   # Seat 2
+        (0.63, 0.35, 0.10, 0.03),   # Seat 3
+        (0.63, 0.57, 0.10, 0.03),   # Seat 4
+        (0.45, 0.79, 0.10, 0.03),   # Seat 5
     ],
-    # Player bet regions (between player and center)
+    # Player bet amounts — between player and pot
     bet_regions=[
-        (0.22, 0.62, 0.10, 0.04),   # Seat 0
-        (0.18, 0.42, 0.10, 0.04),   # Seat 1
-        (0.42, 0.18, 0.10, 0.04),   # Seat 2
-        (0.66, 0.42, 0.10, 0.04),   # Seat 3
-        (0.66, 0.62, 0.10, 0.04),   # Seat 4
-        (0.42, 0.75, 0.10, 0.04),   # Seat 5
+        (0.35, 0.57, 0.07, 0.03),   # Seat 0
+        (0.35, 0.40, 0.07, 0.03),   # Seat 1
+        (0.47, 0.30, 0.07, 0.03),   # Seat 2
+        (0.56, 0.40, 0.07, 0.03),   # Seat 3
+        (0.56, 0.57, 0.07, 0.03),   # Seat 4
+        (0.47, 0.68, 0.07, 0.03),   # Seat 5
     ],
-    # Dealer button regions
+    # Dealer button — small D icon near each seat
     dealer_regions=[
-        (0.22, 0.70, 0.03, 0.04),   # Seat 0
-        (0.16, 0.48, 0.03, 0.04),   # Seat 1
-        (0.48, 0.14, 0.03, 0.04),   # Seat 2
-        (0.76, 0.48, 0.03, 0.04),   # Seat 3
-        (0.76, 0.70, 0.03, 0.04),   # Seat 4
-        (0.48, 0.82, 0.03, 0.04),   # Seat 5
+        (0.36, 0.62, 0.02, 0.025),  # Seat 0
+        (0.36, 0.37, 0.02, 0.025),  # Seat 1
+        (0.53, 0.26, 0.02, 0.025),  # Seat 2
+        (0.62, 0.37, 0.02, 0.025),  # Seat 3
+        (0.62, 0.62, 0.02, 0.025),  # Seat 4
+        (0.53, 0.76, 0.02, 0.025),  # Seat 5
     ],
-    # CoinPoker stats (VPIP/PFR) below stack
+    # CoinPoker stats (VPIP/PFR) — below stack
     stats_regions=[
-        (0.10, 0.72, 0.12, 0.06),   # Seat 0
-        (0.04, 0.46, 0.12, 0.06),   # Seat 1
-        (0.38, 0.12, 0.12, 0.06),   # Seat 2
-        (0.78, 0.46, 0.12, 0.06),   # Seat 3
-        (0.78, 0.72, 0.12, 0.06),   # Seat 4
-        (0.38, 0.94, 0.12, 0.06),   # Seat 5
+        (0.27, 0.63, 0.10, 0.04),   # Seat 0
+        (0.27, 0.41, 0.10, 0.04),   # Seat 1
+        (0.46, 0.27, 0.10, 0.04),   # Seat 2
+        (0.64, 0.41, 0.10, 0.04),   # Seat 3
+        (0.64, 0.63, 0.10, 0.04),   # Seat 4
+        (0.46, 0.85, 0.10, 0.04),   # Seat 5
     ],
-    # Player label anchors — where to draw EXP./GEN. mini-labels
+    # Player label anchors — (center_x, center_y) for EXP./GEN. labels
     player_label_anchors=[
-        (0.16, 0.60),   # Seat 0
-        (0.10, 0.35),   # Seat 1
-        (0.44, 0.01),   # Seat 2
-        (0.84, 0.35),   # Seat 3
-        (0.84, 0.60),   # Seat 4
-        (0.44, 0.83),   # Seat 5
+        (0.28, 0.53),   # Seat 0
+        (0.28, 0.32),   # Seat 1
+        (0.48, 0.17),   # Seat 2
+        (0.68, 0.32),   # Seat 3
+        (0.68, 0.53),   # Seat 4
+        (0.48, 0.76),   # Seat 5
     ],
 )
 
 
 # CoinPoker Heads-Up (2 players) ROI
-# Coordinates normalized to detected table bounding box.
+# ALL coordinates normalized to FULL frame (not sub-frame).
 # Seat 0 = Villain (top center), Seat 1 = Hero (bottom center)
 COINPOKER_HU_ROI = SiteROI(
-    hero_card1=(0.37, 0.78, 0.05, 0.10),
-    hero_card2=(0.43, 0.78, 0.05, 0.10),
-    board_card1=(0.30, 0.40, 0.05, 0.10),
-    board_card2=(0.37, 0.40, 0.05, 0.10),
-    board_card3=(0.44, 0.40, 0.05, 0.10),
-    board_card4=(0.51, 0.40, 0.05, 0.10),
-    board_card5=(0.58, 0.40, 0.05, 0.10),
-    pot_region=(0.35, 0.53, 0.22, 0.05),
+    hero_card1=(0.42, 0.72, 0.04, 0.08),
+    hero_card2=(0.47, 0.72, 0.04, 0.08),
+    board_card1=(0.37, 0.48, 0.035, 0.07),
+    board_card2=(0.41, 0.48, 0.035, 0.07),
+    board_card3=(0.45, 0.48, 0.035, 0.07),
+    board_card4=(0.49, 0.48, 0.035, 0.07),
+    board_card5=(0.53, 0.48, 0.035, 0.07),
+    pot_region=(0.42, 0.42, 0.14, 0.04),
     stack_regions=[
-        (0.38, 0.08, 0.14, 0.04),   # Seat 0 — Villain (top)
-        (0.38, 0.90, 0.14, 0.04),   # Seat 1 — Hero (bottom)
+        (0.46, 0.24, 0.10, 0.03),   # Seat 0 — Villain (top)
+        (0.46, 0.82, 0.10, 0.03),   # Seat 1 — Hero (bottom)
     ],
     name_regions=[
-        (0.38, 0.04, 0.14, 0.04),   # Seat 0 — Villain
-        (0.38, 0.86, 0.14, 0.04),   # Seat 1 — Hero
+        (0.45, 0.21, 0.10, 0.03),   # Seat 0 — Villain
+        (0.45, 0.79, 0.10, 0.03),   # Seat 1 — Hero
     ],
     bet_regions=[
-        (0.42, 0.25, 0.10, 0.04),   # Villain bet
-        (0.42, 0.70, 0.10, 0.04),   # Hero bet
+        (0.47, 0.33, 0.07, 0.03),   # Villain bet
+        (0.47, 0.65, 0.07, 0.03),   # Hero bet
     ],
     dealer_regions=[
-        (0.55, 0.12, 0.03, 0.04),   # Villain dealer
-        (0.55, 0.84, 0.03, 0.04),   # Hero dealer
+        (0.55, 0.23, 0.02, 0.025),  # Villain dealer
+        (0.55, 0.78, 0.02, 0.025),  # Hero dealer
     ],
     stats_regions=[
-        (0.38, 0.12, 0.14, 0.06),   # Villain stats
-        (0.38, 0.94, 0.14, 0.06),   # Hero stats
+        (0.46, 0.27, 0.10, 0.04),   # Villain stats
+        (0.46, 0.85, 0.10, 0.04),   # Hero stats
     ],
     player_label_anchors=[
-        (0.45, 0.01),   # Villain — label above
-        (0.45, 0.83),   # Hero — label above
+        (0.48, 0.17),   # Villain
+        (0.48, 0.76),   # Hero
     ],
 )
 
