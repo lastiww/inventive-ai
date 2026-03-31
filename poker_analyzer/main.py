@@ -1,8 +1,7 @@
 """Poker Stream GTO Analyzer — Main pipeline.
 
 Reads the screen region where RenderColorQC renders (for OCR),
-and draws a transparent overlay with GTO labels on top.
-No separate display window — just labels floating over the stream.
+auto-detects poker tables, and draws transparent overlay labels.
 """
 
 import time
@@ -17,21 +16,19 @@ from poker_analyzer.multi_table import MultiTableManager
 class PokerAnalyzer:
     """Main application — OCR analysis + transparent overlay."""
 
-    def __init__(self, config: Config, table_cols: int = 1, table_rows: int = 1):
+    def __init__(self, config: Config):
         self.config = config
         self.capture = VideoCapture(config.capture, config.window)
-        self.multi = MultiTableManager(config, table_cols, table_rows)
+        self.multi = MultiTableManager(config)
         self._show_exploit = True
         self._stop_flag = False
         self._overlay: OverlayDisplay | None = None
 
     def run(self):
-        """Main loop."""
+        """Main loop (used in CLI mode)."""
         if not self.capture.open():
-            print("[ERROR] Failed to initialize capture.")
             return
 
-        # Create transparent overlay on top of RenderColorQC
         self._overlay = OverlayDisplay(
             x=self.config.window.overlay_x,
             y=self.config.window.overlay_y,
@@ -40,84 +37,52 @@ class PokerAnalyzer:
         )
         self._overlay.build()
 
-        print("[READY] Overlay active — analyzing RenderColorQC stream.")
+        print("[READY] Overlay active.")
 
         try:
-            self._main_loop()
+            while not self._stop_flag:
+                frame = self.capture.read_frame()
+                if frame is None:
+                    self._overlay.process_events()
+                    time.sleep(0.1)
+                    continue
+
+                fh, fw = frame.shape[:2]
+                detected = self.multi.update_tables(frame)
+
+                for sub_frame, table in detected:
+                    table.game_state = table.parser.parse_frame(sub_frame)
+
+                    if self._detect_state_change(table):
+                        now = time.time()
+                        if (now - table.last_solve_time) > 2.0:
+                            self._trigger_solve(table)
+                            table.last_solve_time = now
+
+                    table.gto_result = table.solver.get_result()
+                    if self._show_exploit and table.gto_result and table.game_state:
+                        opponent = self._find_opponent(table.game_state)
+                        if opponent:
+                            table.exploit_result = table.game_state.exploitative_result
+
+                    if self._overlay:
+                        anchors = self.multi.get_label_anchors_for_table(table, fw, fh)
+                        self._overlay.update_labels(
+                            anchors, table.game_state,
+                            table.gto_result,
+                            table.exploit_result if self._show_exploit else None,
+                        )
+
+                if self._overlay:
+                    self._overlay.process_events()
+
+                time.sleep(0.1)
         except KeyboardInterrupt:
             pass
         finally:
             self.capture.release()
             if self._overlay:
                 self._overlay.destroy()
-
-    def _main_loop(self):
-        frame_interval = 1.0 / 10  # 10 FPS
-        solve_cooldown = 2.0
-
-        while not self._stop_flag:
-            loop_start = time.time()
-
-            # Read screen region for OCR (not displayed)
-            frame = self.capture.read_frame()
-            if frame is None:
-                if self._overlay:
-                    self._overlay.process_events()
-                time.sleep(0.1)
-                continue
-
-            fh, fw = frame.shape[:2]
-
-            # Split into table sub-frames
-            table_frames = self.multi.split_frame(frame)
-
-            all_debug_rois = []
-
-            for idx, (sub_frame, off_x, off_y, tw, th) in enumerate(table_frames):
-                table = self.multi.tables[idx]
-
-                # OCR parse
-                table.game_state = table.parser.parse_frame(sub_frame)
-
-                # Debug ROIs
-                if self.config.debug_ocr:
-                    rois = self.multi.get_debug_rois_for_table(table, sub_frame, off_x, off_y)
-                    all_debug_rois.extend(rois)
-
-                # Solve
-                now = time.time()
-                if self._detect_state_change(table) and (now - table.last_solve_time) > solve_cooldown:
-                    self._trigger_solve(table)
-                    table.last_solve_time = now
-
-                # Get results
-                table.gto_result = table.solver.get_result()
-                if self._show_exploit and table.gto_result and table.game_state:
-                    opponent = self._find_opponent(table.game_state)
-                    if opponent:
-                        table.exploit_result = table.game_state.exploitative_result
-
-                # Update overlay labels for this table
-                if self._overlay:
-                    anchors = self.multi.get_label_anchors_for_table(
-                        idx, off_x, off_y, tw, th, fw, fh,
-                    )
-                    self._overlay.update_labels(
-                        anchors,
-                        table.game_state,
-                        table.gto_result,
-                        table.exploit_result if self._show_exploit else None,
-                    )
-
-            # Update debug rectangles
-            if self._overlay:
-                self._overlay.update_debug_rois(all_debug_rois if self.config.debug_ocr else None)
-                self._overlay.process_events()
-
-            # Frame rate control
-            elapsed = time.time() - loop_start
-            if frame_interval - elapsed > 0:
-                time.sleep(frame_interval - elapsed)
 
     def _detect_state_change(self, table) -> bool:
         state = table.game_state
@@ -134,7 +99,6 @@ class PokerAnalyzer:
         state = table.game_state
         if state is None:
             return
-
         if state.street == Street.PREFLOP:
             result = table.solver.solve(state, "", "")
             state.gto_result = result
@@ -143,7 +107,6 @@ class PokerAnalyzer:
         hero = state.hero
         if hero is None or hero.position is None:
             return
-
         villain = None
         for p in state.active_players:
             if p != hero and p.position is not None:
@@ -183,11 +146,9 @@ class PokerAnalyzer:
 
 
 def main():
-    """CLI entry point."""
     import argparse
-    parser = argparse.ArgumentParser(description="Poker Stream GTO Analyzer")
+    parser = argparse.ArgumentParser(description="Poker GTO Analyzer (CLI)")
     parser.add_argument("--site", choices=["winamax", "coinpoker"], default="coinpoker")
-    parser.add_argument("--tables", type=str, default="1x1")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--solver-path", type=str, default="./TexasSolver")
     parser.add_argument("--rendercolor-x", type=int, default=1920)
@@ -195,12 +156,6 @@ def main():
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     args = parser.parse_args()
-
-    try:
-        cols, rows = args.tables.split("x")
-        cols, rows = int(cols), int(rows)
-    except ValueError:
-        cols, rows = 1, 1
 
     config = Config(site=args.site, debug_ocr=args.debug)
     config.capture.rendercolor_x = args.rendercolor_x
@@ -213,7 +168,7 @@ def main():
     config.window.overlay_width = args.width
     config.window.overlay_height = args.height
 
-    analyzer = PokerAnalyzer(config, cols, rows)
+    analyzer = PokerAnalyzer(config)
     analyzer.run()
 
 

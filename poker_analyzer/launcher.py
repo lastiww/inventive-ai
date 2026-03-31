@@ -240,7 +240,7 @@ class LauncherWindow:
 
         # Create analyzer
         from poker_analyzer.main import PokerAnalyzer
-        self._analyzer = PokerAnalyzer(config, 1, 1)
+        self._analyzer = PokerAnalyzer(config)
         self._analyzer._show_exploit = self.exploit_var.get()
 
         # Initialize capture
@@ -312,15 +312,20 @@ class LauncherWindow:
             return
 
         fh, fw = frame.shape[:2]
-        table_frames = analyzer.multi.split_frame(frame)
+
+        # Auto-detect tables in the frame
+        detected = analyzer.multi.update_tables(frame)
         all_debug_rois = []
 
-        for idx, (sub_frame, off_x, off_y, tw, th) in enumerate(table_frames):
-            table = analyzer.multi.tables[idx]
+        # Show table borders in debug mode
+        if analyzer.config.debug_ocr:
+            all_debug_rois.extend(analyzer.multi.get_table_border_rois())
+
+        for sub_frame, table in detected:
             table.game_state = table.parser.parse_frame(sub_frame)
 
             if analyzer.config.debug_ocr:
-                rois = analyzer.multi.get_debug_rois_for_table(table, sub_frame, off_x, off_y)
+                rois = analyzer.multi.get_debug_rois_for_table(table, sub_frame)
                 all_debug_rois.extend(rois)
 
             now = time.time()
@@ -337,7 +342,7 @@ class LauncherWindow:
             # Update overlay labels
             if analyzer._overlay:
                 anchors = analyzer.multi.get_label_anchors_for_table(
-                    idx, off_x, off_y, tw, th, fw, fh,
+                    table, fw, fh,
                 )
                 analyzer._overlay.update_labels(
                     anchors, table.game_state,

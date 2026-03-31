@@ -1,9 +1,10 @@
-"""Multi-table manager — splits a captured frame into individual tables.
+"""Multi-table manager — auto-detects poker tables in the captured frame.
 
-Supports tiled table layouts (e.g., 2x3 for 6 tables).
-Each table gets its own OCR parser, solver state, and overlay labels.
+Detects tables by finding large green (poker felt) regions.
+Each detected table gets its own OCR parser, solver state, and overlay labels.
 """
 
+import cv2
 import numpy as np
 
 from poker_analyzer.config import Config
@@ -16,7 +17,7 @@ from poker_analyzer.solver.texas_solver import TexasSolver
 
 
 class TableInstance:
-    """State for a single table in a multi-table setup."""
+    """State for a single table."""
 
     def __init__(self, table_id: int, config: Config):
         self.table_id = table_id
@@ -26,7 +27,6 @@ class TableInstance:
         self.tracker = PlayerTracker()
         self.exploit_solver = ExploitativeSolver(config.solver, self.tracker)
 
-        # Per-table state
         self.game_state: GameState | None = None
         self.gto_result: SolverResult | None = None
         self.exploit_result: SolverResult | None = None
@@ -34,80 +34,123 @@ class TableInstance:
         self.last_pot: float = 0.0
         self.last_solve_time: float = 0.0
 
+        # Table region in the full frame (x, y, w, h)
+        self.region: tuple[int, int, int, int] = (0, 0, 0, 0)
+
 
 class MultiTableManager:
-    """Manages multiple poker tables from a single captured frame.
+    """Auto-detects and manages multiple poker tables.
 
-    The captured frame (e.g., 1920x1080) is split into a grid of
-    sub-frames, each containing one poker table. Each table is
-    analyzed independently with its own OCR and solver state.
-
-    Example layouts:
-        1x1 = single table (full frame)
-        2x1 = 2 tables side by side
-        1x2 = 2 tables stacked vertically
-        2x2 = 4 tables (2 cols x 2 rows)
-        3x2 = 6 tables (3 cols x 2 rows)
-        2x3 = 6 tables (2 cols x 3 rows)
+    Finds poker tables by detecting large green (felt) regions in the frame.
     """
 
-    def __init__(self, config: Config, cols: int = 1, rows: int = 1):
+    def __init__(self, config: Config, max_tables: int = 6):
         self.config = config
-        self.cols = cols
-        self.rows = rows
-        self.num_tables = cols * rows
-
-        # Create one TableInstance per table slot
+        self.max_tables = max_tables
         self.tables: list[TableInstance] = []
-        for i in range(self.num_tables):
-            self.tables.append(TableInstance(i, config))
+        self._last_regions: list[tuple[int, int, int, int]] = []
 
-    def split_frame(self, frame: np.ndarray) -> list[tuple[np.ndarray, int, int, int, int]]:
-        """Split the captured frame into sub-frames for each table.
+    def detect_tables(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Detect poker table regions in the frame.
+
+        Looks for large green/teal areas (poker felt color).
 
         Returns:
-            List of (sub_frame, offset_x, offset_y, width, height)
-            for each table slot.
+            List of (x, y, w, h) bounding boxes for each detected table.
         """
         fh, fw = frame.shape[:2]
-        table_w = fw // self.cols
-        table_h = fh // self.rows
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # CoinPoker felt is green/teal
+        # Winamax felt is darker green
+        lower_green = np.array([35, 40, 40])
+        upper_green = np.array([85, 255, 255])
+        mask = cv2.inRange(hsv, lower_green, upper_green)
+
+        # Clean up mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+        # Find contours
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Filter by minimum area (at least 5% of frame = a real table)
+        min_area = fh * fw * 0.03
+        regions = []
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+
+            x, y, w, h = cv2.boundingRect(contour)
+
+            # Expand bounding box to include players around the table
+            # Players sit around the felt, so extend by ~30% in each direction
+            expand_x = int(w * 0.25)
+            expand_y = int(h * 0.40)  # more vertical expansion for players above/below
+
+            x = max(0, x - expand_x)
+            y = max(0, y - expand_y)
+            w = min(fw - x, w + expand_x * 2)
+            h = min(fh - y, h + expand_y * 2)
+
+            regions.append((x, y, w, h))
+
+        # Sort by position (top-left to bottom-right)
+        regions.sort(key=lambda r: (r[1] // (fh // 3), r[0]))
+
+        # Limit to max tables
+        regions = regions[:self.max_tables]
+
+        return regions
+
+    def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
+        """Detect tables and return sub-frames with their TableInstances.
+
+        Returns:
+            List of (sub_frame, table_instance) for each detected table.
+        """
+        regions = self.detect_tables(frame)
+
+        # If no tables detected, keep using last known regions
+        if not regions and self._last_regions:
+            regions = self._last_regions
+        elif regions:
+            self._last_regions = regions
+
+        # Ensure we have enough TableInstance objects
+        while len(self.tables) < len(regions):
+            self.tables.append(TableInstance(len(self.tables), self.config))
 
         results = []
-        for row in range(self.rows):
-            for col in range(self.cols):
-                x = col * table_w
-                y = row * table_h
-                sub = frame[y:y + table_h, x:x + table_w]
-                results.append((sub, x, y, table_w, table_h))
+        for i, (x, y, w, h) in enumerate(regions):
+            table = self.tables[i]
+            table.region = (x, y, w, h)
+
+            # Extract sub-frame for this table
+            sub = frame[y:y + h, x:x + w]
+            results.append((sub, table))
 
         return results
 
     def get_label_anchors_for_table(
         self,
-        table_idx: int,
-        offset_x: int,
-        offset_y: int,
-        table_w: int,
-        table_h: int,
+        table: TableInstance,
         frame_w: int,
         frame_h: int,
     ) -> list[tuple[float, float]]:
-        """Convert per-table normalized anchors to full-frame normalized coords.
-
-        Takes the player_label_anchors from config (normalized 0-1 within
-        a single table) and converts them to full-frame coordinates.
-        """
+        """Get overlay label anchors in full-frame normalized coords."""
         anchors = self.config.site_roi.player_label_anchors
         if not anchors:
             return []
 
+        x, y, w, h = table.region
         full_anchors = []
         for ax, ay in anchors:
-            # Convert from table-local to full-frame coordinates
-            abs_x = offset_x + ax * table_w
-            abs_y = offset_y + ay * table_h
-            # Normalize to full frame
+            abs_x = x + ax * w
+            abs_y = y + ay * h
             full_anchors.append((abs_x / frame_w, abs_y / frame_h))
 
         return full_anchors
@@ -116,14 +159,23 @@ class MultiTableManager:
         self,
         table: TableInstance,
         sub_frame: np.ndarray,
-        offset_x: int,
-        offset_y: int,
     ) -> list[tuple[tuple[int, int, int, int], str]]:
         """Get debug ROIs offset to full-frame coordinates."""
         local_rois = table.parser.get_debug_rois(sub_frame)
+        ox, oy, _, _ = table.region
+        tid = table.table_id + 1
 
-        offset_rois = []
-        for (x, y, w, h), label in local_rois:
-            offset_rois.append(((x + offset_x, y + offset_y, w, h), f"T{table.table_id + 1} {label}"))
+        result = []
+        for (rx, ry, rw, rh), label in local_rois:
+            result.append(((rx + ox, ry + oy, rw, rh), f"T{tid} {label}"))
 
-        return offset_rois
+        return result
+
+    def get_table_border_rois(self) -> list[tuple[tuple[int, int, int, int], str]]:
+        """Get bounding box ROIs for detected tables (for debug display)."""
+        rois = []
+        for table in self.tables:
+            x, y, w, h = table.region
+            if w > 0 and h > 0:
+                rois.append(((x, y, w, h), f"TABLE {table.table_id + 1}"))
+        return rois
