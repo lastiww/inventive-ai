@@ -33,7 +33,7 @@ class LauncherWindow:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        w, h = 500, 700
+        w, h = 500, 780
         sx = (self.root.winfo_screenwidth() - w) // 2
         sy = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{sx}+{sy}")
@@ -105,35 +105,25 @@ class LauncherWindow:
         ).grid(row=row, column=1, sticky="w", pady=4)
         row += 1
 
-        # Gap X — horizontal space between tables (pixels)
-        self._label(self.config_frame, "Gap X (px) :", row)
-        self.gap_x_var = tk.IntVar(value=0)
-        tk.Scale(
-            self.config_frame, from_=0, to=60, orient=tk.HORIZONTAL,
-            variable=self.gap_x_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
-            highlightthickness=0, length=160, font=("Consolas", 8),
-        ).grid(row=row, column=1, sticky="w", pady=2)
-        row += 1
-
-        # Gap Y — vertical space between tables (pixels)
-        self._label(self.config_frame, "Gap Y (px) :", row)
-        self.gap_y_var = tk.IntVar(value=0)
-        tk.Scale(
-            self.config_frame, from_=0, to=60, orient=tk.HORIZONTAL,
-            variable=self.gap_y_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
-            highlightthickness=0, length=160, font=("Consolas", 8),
-        ).grid(row=row, column=1, sticky="w", pady=2)
-        row += 1
-
-        # Padding — shrink each table rectangle inward (pixels)
-        self._label(self.config_frame, "Padding (px) :", row)
-        self.padding_var = tk.IntVar(value=0)
-        tk.Scale(
-            self.config_frame, from_=0, to=40, orient=tk.HORIZONTAL,
-            variable=self.padding_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
-            highlightthickness=0, length=160, font=("Consolas", 8),
-        ).grid(row=row, column=1, sticky="w", pady=2)
-        row += 1
+        # --- Grid adjustment sliders ---
+        sliders = [
+            ("Gap X (px) :",    "gap_x_var",     0, 80,  0),
+            ("Gap Y (px) :",    "gap_y_var",     0, 80,  0),
+            ("Offset X (px) :", "offset_x_var",  0, 120, 0),
+            ("Offset Y (px) :", "offset_y_var",  0, 120, 0),
+            ("Crop Bas (px) :", "crop_bot_var",   0, 80,  0),
+            ("Padding (px) :",  "padding_var",   0, 40,  0),
+        ]
+        for label_text, var_name, from_, to_, default in sliders:
+            self._label(self.config_frame, label_text, row)
+            var = tk.IntVar(value=default)
+            setattr(self, var_name, var)
+            tk.Scale(
+                self.config_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
+                variable=var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
+                highlightthickness=0, length=160, font=("Consolas", 8),
+            ).grid(row=row, column=1, sticky="w", pady=1)
+            row += 1
 
         self._label(self.config_frame, "TexasSolver :", row)
         sf = tk.Frame(self.config_frame, bg=BG)
@@ -203,29 +193,23 @@ class LauncherWindow:
         adj_frame = tk.Frame(self.control_frame, bg=BG)
         adj_frame.pack(fill=tk.X)
 
-        tk.Label(adj_frame, text="Gap X", font=("Consolas", 8), fg=FG, bg=BG).grid(row=0, column=0, sticky="e", padx=4)
-        self.live_gap_x = tk.Scale(
-            adj_frame, from_=0, to=60, orient=tk.HORIZONTAL,
-            variable=self.gap_x_var, command=self._on_grid_change,
-            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
-        )
-        self.live_gap_x.grid(row=0, column=1, pady=1)
-
-        tk.Label(adj_frame, text="Gap Y", font=("Consolas", 8), fg=FG, bg=BG).grid(row=1, column=0, sticky="e", padx=4)
-        self.live_gap_y = tk.Scale(
-            adj_frame, from_=0, to=60, orient=tk.HORIZONTAL,
-            variable=self.gap_y_var, command=self._on_grid_change,
-            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
-        )
-        self.live_gap_y.grid(row=1, column=1, pady=1)
-
-        tk.Label(adj_frame, text="Padding", font=("Consolas", 8), fg=FG, bg=BG).grid(row=2, column=0, sticky="e", padx=4)
-        self.live_padding = tk.Scale(
-            adj_frame, from_=0, to=40, orient=tk.HORIZONTAL,
-            variable=self.padding_var, command=self._on_grid_change,
-            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
-        )
-        self.live_padding.grid(row=2, column=1, pady=1)
+        live_sliders = [
+            ("Gap X",     self.gap_x_var,    0, 80),
+            ("Gap Y",     self.gap_y_var,    0, 80),
+            ("Offset X",  self.offset_x_var, 0, 120),
+            ("Offset Y",  self.offset_y_var, 0, 120),
+            ("Crop Bas",  self.crop_bot_var,  0, 80),
+            ("Padding",   self.padding_var,  0, 40),
+        ]
+        for i, (label, var, from_, to_) in enumerate(live_sliders):
+            tk.Label(adj_frame, text=label, font=("Consolas", 8), fg=FG, bg=BG
+                     ).grid(row=i, column=0, sticky="e", padx=4)
+            tk.Scale(
+                adj_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
+                variable=var, command=self._on_grid_change,
+                bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0,
+                length=140, font=("Consolas", 7),
+            ).grid(row=i, column=1, pady=0)
 
         tk.Button(
             self.control_frame, text="STOP",
@@ -305,6 +289,9 @@ class LauncherWindow:
         config.grid_rows = grid_rows
         config.grid_gap_x = self.gap_x_var.get()
         config.grid_gap_y = self.gap_y_var.get()
+        config.grid_offset_x = self.offset_x_var.get()
+        config.grid_offset_y = self.offset_y_var.get()
+        config.grid_crop_bottom = self.crop_bot_var.get()
         config.grid_padding = self.padding_var.get()
         config.capture.rendercolor_x = rcx
         config.capture.rendercolor_y = rcy
@@ -430,11 +417,15 @@ class LauncherWindow:
                 analyzer._overlay.update_debug_rois(None)
 
     def _on_grid_change(self, _=None):
-        """Live update gap/padding when sliders move."""
+        """Live update all grid params when sliders move."""
         if self._analyzer and self._analyzer.multi:
-            self._analyzer.multi.gap_x = self.gap_x_var.get()
-            self._analyzer.multi.gap_y = self.gap_y_var.get()
-            self._analyzer.multi.padding = self.padding_var.get()
+            m = self._analyzer.multi
+            m.gap_x = self.gap_x_var.get()
+            m.gap_y = self.gap_y_var.get()
+            m.offset_x = self.offset_x_var.get()
+            m.offset_y = self.offset_y_var.get()
+            m.crop_bottom = self.crop_bot_var.get()
+            m.padding = self.padding_var.get()
 
     def _toggle_debug(self):
         self.debug_var.set(not self.debug_var.get())

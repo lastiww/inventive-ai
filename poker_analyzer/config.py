@@ -260,9 +260,12 @@ class Config:
     # Grid layout for multi-table (set by launcher)
     grid_cols: int = 1   # e.g. 2 for "2x2"
     grid_rows: int = 1   # e.g. 2 for "2x2"
-    grid_gap_x: int = 0  # horizontal gap between tables (pixels)
-    grid_gap_y: int = 0  # vertical gap between tables (pixels)
-    grid_padding: int = 0  # shrink each table inward (pixels)
+    grid_gap_x: int = 0       # horizontal gap between tables (pixels)
+    grid_gap_y: int = 0       # vertical gap between tables (pixels)
+    grid_offset_x: int = 0    # global X offset (skip left border)
+    grid_offset_y: int = 0    # global Y offset (skip title bar)
+    grid_crop_bottom: int = 0  # crop bottom pixels (skip "Join Wait List" bar)
+    grid_padding: int = 0     # shrink each cell inward (pixels)
 
     @property
     def site_roi(self) -> SiteROI:

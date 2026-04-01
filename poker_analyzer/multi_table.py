@@ -45,9 +45,12 @@ class MultiTableManager:
         self.config = config
         self.cols = max(config.grid_cols, 1)
         self.rows = max(config.grid_rows, 1)
-        self.gap_x = config.grid_gap_x    # pixels between tables horizontally
-        self.gap_y = config.grid_gap_y    # pixels between tables vertically
-        self.padding = config.grid_padding  # shrink each cell inward (pixels)
+        self.gap_x = config.grid_gap_x        # pixels between tables horizontally
+        self.gap_y = config.grid_gap_y        # pixels between tables vertically
+        self.offset_x = config.grid_offset_x  # global X offset (left border)
+        self.offset_y = config.grid_offset_y  # global Y offset (title bar)
+        self.crop_bottom = config.grid_crop_bottom  # crop bottom bar
+        self.padding = config.grid_padding    # shrink each cell inward
         self.num_tables = self.cols * self.rows
 
         self.tables: list[TableInstance] = []
@@ -55,31 +58,37 @@ class MultiTableManager:
             self.tables.append(TableInstance(i, config))
 
     def _compute_cells(self, fw: int, fh: int) -> list[tuple[int, int, int, int]]:
-        """Divide the frame into grid cells with gaps and padding.
+        """Divide the frame into grid cells with offset, crop, gaps, padding.
 
-        Layout:
-          gap_x is the total horizontal space between columns.
-          gap_y is the total vertical space between rows.
-          padding shrinks each cell inward on all 4 sides.
+        Processing order:
+          1. offset_x/offset_y: skip left border and top title bar
+          2. crop_bottom: remove bottom bar ("Join Wait List")
+          3. gap_x/gap_y: space between tiled tables
+          4. padding: shrink each cell inward
 
-        Returns list of (x, y, w, h) for each cell.
+        Returns list of (x, y, w, h) for each cell in full-frame coords.
         """
+        # Usable area after offset and crop
+        usable_x = self.offset_x
+        usable_y = self.offset_y
+        usable_w = fw - self.offset_x
+        usable_h = fh - self.offset_y - self.crop_bottom
+
         # Total gap space
         total_gap_x = self.gap_x * (self.cols - 1) if self.cols > 1 else 0
         total_gap_y = self.gap_y * (self.rows - 1) if self.rows > 1 else 0
 
         # Cell size before padding
-        cell_w = (fw - total_gap_x) // self.cols
-        cell_h = (fh - total_gap_y) // self.rows
+        cell_w = (usable_w - total_gap_x) // max(self.cols, 1)
+        cell_h = (usable_h - total_gap_y) // max(self.rows, 1)
 
         cells = []
         for r in range(self.rows):
             for c in range(self.cols):
-                x = c * (cell_w + self.gap_x) + self.padding
-                y = r * (cell_h + self.gap_y) + self.padding
+                x = usable_x + c * (cell_w + self.gap_x) + self.padding
+                y = usable_y + r * (cell_h + self.gap_y) + self.padding
                 w = cell_w - self.padding * 2
                 h = cell_h - self.padding * 2
-                # Clamp
                 w = max(w, 10)
                 h = max(h, 10)
                 cells.append((x, y, w, h))
@@ -93,8 +102,10 @@ class MultiTableManager:
         """
         fh, fw = frame.shape[:2]
 
-        # Single table, no padding → use full frame directly
-        if self.num_tables == 1 and self.padding == 0:
+        # Single table, no adjustments → use full frame directly
+        no_adjustments = (self.padding == 0 and self.offset_x == 0
+                          and self.offset_y == 0 and self.crop_bottom == 0)
+        if self.num_tables == 1 and no_adjustments:
             self.tables[0].region = (0, 0, fw, fh)
             return [(frame, self.tables[0])]
 
