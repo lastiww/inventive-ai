@@ -106,12 +106,13 @@ class LauncherWindow:
         row += 1
 
         # --- Grid adjustment sliders ---
-        # Ranges use negative values too (shrink or shift left/up)
         sliders = [
             ("Gap X (px) :",      "gap_x_var",      0, 100, 0),
             ("Gap Y (px) :",      "gap_y_var",      0, 100, 0),
             ("Largeur (%%) :",    "width_pct_var",  80, 120, 100),
             ("Hauteur (%%) :",    "height_pct_var", 80, 120, 100),
+            ("Décalage X :",      "shift_x_var",   -200, 200, 0),
+            ("Décalage Y :",      "shift_y_var",   -200, 200, 0),
         ]
         for label_text, var_name, from_, to_, default in sliders:
             self._label(self.config_frame, label_text, row)
@@ -193,10 +194,12 @@ class LauncherWindow:
         adj_frame.pack(fill=tk.X)
 
         live_sliders = [
-            ("Gap X",     self.gap_x_var,     0, 100),
-            ("Gap Y",     self.gap_y_var,     0, 100),
-            ("Largeur %", self.width_pct_var, 80, 120),
-            ("Hauteur %", self.height_pct_var, 80, 120),
+            ("Gap X",       self.gap_x_var,      0, 100),
+            ("Gap Y",       self.gap_y_var,      0, 100),
+            ("Largeur %",   self.width_pct_var,  80, 120),
+            ("Hauteur %",   self.height_pct_var, 80, 120),
+            ("Décalage X",  self.shift_x_var,   -200, 200),
+            ("Décalage Y",  self.shift_y_var,   -200, 200),
         ]
         for i, (label, var, from_, to_) in enumerate(live_sliders):
             tk.Label(adj_frame, text=label, font=("Consolas", 8), fg=FG, bg=BG
@@ -288,6 +291,8 @@ class LauncherWindow:
         config.grid_gap_y = self.gap_y_var.get()
         config.grid_width_pct = self.width_pct_var.get()
         config.grid_height_pct = self.height_pct_var.get()
+        config.grid_shift_x = self.shift_x_var.get()
+        config.grid_shift_y = self.shift_y_var.get()
         config.capture.rendercolor_x = rcx
         config.capture.rendercolor_y = rcy
         config.capture.width = width
@@ -419,6 +424,8 @@ class LauncherWindow:
             m.gap_y = self.gap_y_var.get()
             m.width_pct = self.width_pct_var.get()
             m.height_pct = self.height_pct_var.get()
+            m.shift_x = self.shift_x_var.get()
+            m.shift_y = self.shift_y_var.get()
 
     def _toggle_debug(self):
         self.debug_var.set(not self.debug_var.get())

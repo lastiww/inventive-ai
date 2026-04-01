@@ -264,6 +264,8 @@ class Config:
     grid_gap_y: int = 0        # vertical gap between tables (pixels)
     grid_width_pct: int = 100  # table width adjustment (80-120%)
     grid_height_pct: int = 100 # table height adjustment (80-120%)
+    grid_shift_x: int = 0     # shift all tables left/right (pixels)
+    grid_shift_y: int = 0     # shift all tables up/down (pixels)
 
     @property
     def site_roi(self) -> SiteROI:

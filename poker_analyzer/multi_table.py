@@ -48,6 +48,8 @@ class MultiTableManager:
         self.gap_y = config.grid_gap_y       # pixels between rows
         self.width_pct = config.grid_width_pct   # 80-120, table width %
         self.height_pct = config.grid_height_pct  # 80-120, table height %
+        self.shift_x = config.grid_shift_x       # shift all cells left/right
+        self.shift_y = config.grid_shift_y       # shift all cells up/down
         self.num_tables = self.cols * self.rows
 
         self.tables: list[TableInstance] = []
@@ -82,9 +84,14 @@ class MultiTableManager:
             for c in range(self.cols):
                 slot_x = c * (raw_w + self.gap_x)
                 slot_y = r * (raw_h + self.gap_y)
-                x = slot_x + dx
-                y = slot_y + dy
-                cells.append((max(x, 0), max(y, 0), max(cell_w, 10), max(cell_h, 10)))
+                x = slot_x + dx + self.shift_x
+                y = slot_y + dy + self.shift_y
+                # Clamp to frame
+                x = max(0, min(x, fw - 10))
+                y = max(0, min(y, fh - 10))
+                w = min(cell_w, fw - x)
+                h = min(cell_h, fh - y)
+                cells.append((x, y, max(w, 10), max(h, 10)))
         return cells
 
     def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
