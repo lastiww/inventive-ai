@@ -1,8 +1,7 @@
-"""Multi-table manager — fixed grid layout with gap/padding controls.
+"""Multi-table manager — fixed grid layout with gap + size controls.
 
 The user selects a grid (1x1, 1x2, 2x2, etc.) in the launcher
-and adjusts Gap X, Gap Y, and Padding sliders.
-The captured frame is divided into cells accordingly.
+and adjusts Gap X, Gap Y, Largeur %, Hauteur % sliders.
 """
 
 import numpy as np
@@ -39,18 +38,16 @@ class TableInstance:
 
 
 class MultiTableManager:
-    """Manages tables using a fixed grid layout with gap/padding."""
+    """Manages tables using a fixed grid layout."""
 
     def __init__(self, config: Config):
         self.config = config
         self.cols = max(config.grid_cols, 1)
         self.rows = max(config.grid_rows, 1)
-        self.gap_x = config.grid_gap_x        # pixels between tables horizontally
-        self.gap_y = config.grid_gap_y        # pixels between tables vertically
-        self.offset_x = config.grid_offset_x  # global X offset (left border)
-        self.offset_y = config.grid_offset_y  # global Y offset (title bar)
-        self.crop_bottom = config.grid_crop_bottom  # crop bottom bar
-        self.padding = config.grid_padding    # shrink each cell inward
+        self.gap_x = config.grid_gap_x       # pixels between columns
+        self.gap_y = config.grid_gap_y       # pixels between rows
+        self.width_pct = config.grid_width_pct   # 80-120, table width %
+        self.height_pct = config.grid_height_pct  # 80-120, table height %
         self.num_tables = self.cols * self.rows
 
         self.tables: list[TableInstance] = []
@@ -58,54 +55,49 @@ class MultiTableManager:
             self.tables.append(TableInstance(i, config))
 
     def _compute_cells(self, fw: int, fh: int) -> list[tuple[int, int, int, int]]:
-        """Divide the frame into grid cells with offset, crop, gaps, padding.
+        """Divide the frame into grid cells.
 
-        Processing order:
-          1. offset_x/offset_y: skip left border and top title bar
-          2. crop_bottom: remove bottom bar ("Join Wait List")
-          3. gap_x/gap_y: space between tiled tables
-          4. padding: shrink each cell inward
+        Each cell's raw size = (total_width - gaps) / cols.
+        Then width_pct / height_pct scale the cell, centered in its slot.
 
-        Returns list of (x, y, w, h) for each cell in full-frame coords.
+        Returns list of (x, y, w, h) in full-frame pixel coords.
         """
-        # Usable area after offset and crop
-        usable_x = self.offset_x
-        usable_y = self.offset_y
-        usable_w = fw - self.offset_x
-        usable_h = fh - self.offset_y - self.crop_bottom
-
-        # Total gap space
         total_gap_x = self.gap_x * (self.cols - 1) if self.cols > 1 else 0
         total_gap_y = self.gap_y * (self.rows - 1) if self.rows > 1 else 0
 
-        # Cell size before padding
-        cell_w = (usable_w - total_gap_x) // max(self.cols, 1)
-        cell_h = (usable_h - total_gap_y) // max(self.rows, 1)
+        # Raw cell size (100%)
+        raw_w = (fw - total_gap_x) // max(self.cols, 1)
+        raw_h = (fh - total_gap_y) // max(self.rows, 1)
+
+        # Scaled cell size
+        cell_w = int(raw_w * self.width_pct / 100)
+        cell_h = int(raw_h * self.height_pct / 100)
+
+        # Offset to center the scaled cell within its raw slot
+        dx = (raw_w - cell_w) // 2
+        dy = (raw_h - cell_h) // 2
 
         cells = []
         for r in range(self.rows):
             for c in range(self.cols):
-                x = usable_x + c * (cell_w + self.gap_x) + self.padding
-                y = usable_y + r * (cell_h + self.gap_y) + self.padding
-                w = cell_w - self.padding * 2
-                h = cell_h - self.padding * 2
-                w = max(w, 10)
-                h = max(h, 10)
-                cells.append((x, y, w, h))
+                slot_x = c * (raw_w + self.gap_x)
+                slot_y = r * (raw_h + self.gap_y)
+                x = slot_x + dx
+                y = slot_y + dy
+                cells.append((max(x, 0), max(y, 0), max(cell_w, 10), max(cell_h, 10)))
         return cells
 
     def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
         """Split frame into grid cells and return sub-frames.
 
-        For 1x1 with no padding: full frame, no cropping.
+        For 1x1 at 100%: full frame, no cropping.
         Otherwise: one sub-frame per cell.
         """
         fh, fw = frame.shape[:2]
 
-        # Single table, no adjustments → use full frame directly
-        no_adjustments = (self.padding == 0 and self.offset_x == 0
-                          and self.offset_y == 0 and self.crop_bottom == 0)
-        if self.num_tables == 1 and no_adjustments:
+        # Single table at default size → full frame
+        if (self.num_tables == 1 and self.width_pct == 100
+                and self.height_pct == 100 and self.gap_x == 0 and self.gap_y == 0):
             self.tables[0].region = (0, 0, fw, fh)
             return [(frame, self.tables[0])]
 
@@ -114,8 +106,11 @@ class MultiTableManager:
         for i, (x, y, w, h) in enumerate(cells):
             if i >= len(self.tables):
                 break
-            self.tables[i].region = (x, y, w, h)
-            sub = frame[y:y + h, x:x + w]
+            # Clamp to frame bounds
+            x2 = min(x + w, fw)
+            y2 = min(y + h, fh)
+            self.tables[i].region = (x, y, x2 - x, y2 - y)
+            sub = frame[y:y2, x:x2]
             results.append((sub, self.tables[i]))
         return results
 
@@ -125,19 +120,19 @@ class MultiTableManager:
         if not anchors:
             return []
 
-        # Single table no padding → raw anchors
-        if self.num_tables == 1 and self.padding == 0:
+        # Single table at default → raw anchors
+        if self.num_tables == 1 and self.width_pct == 100 and self.height_pct == 100:
             return anchors
 
         table = self.tables[table_index]
         x, y, w, h = table.region
 
-        # We need the full frame dimensions to normalize
-        # Estimate from grid: total width = cols * (cell_w + gap) - gap
-        cell_w_padded = w + self.padding * 2
-        cell_h_padded = h + self.padding * 2
-        full_w = self.cols * cell_w_padded + self.gap_x * (self.cols - 1)
-        full_h = self.rows * cell_h_padded + self.gap_y * (self.rows - 1)
+        # Estimate full frame size from first + last cell
+        last = self.tables[-1]
+        full_w = last.region[0] + last.region[2]
+        full_h = last.region[1] + last.region[3]
+        full_w = max(full_w, 1)
+        full_h = max(full_h, 1)
 
         result = []
         for ax, ay in anchors:
@@ -152,8 +147,8 @@ class MultiTableManager:
             return []
         table = self.tables[table_index]
 
-        # Single table no padding → full frame coords
-        if self.num_tables == 1 and self.padding == 0:
+        # Single table at default → full frame coords
+        if self.num_tables == 1 and self.width_pct == 100 and self.height_pct == 100:
             return table.parser.get_debug_rois(frame)
 
         # Multi-table → local ROIs offset to full frame
@@ -168,8 +163,18 @@ class MultiTableManager:
         return result
 
     def get_all_debug_rois(self, frame: np.ndarray) -> list[tuple[tuple[int, int, int, int], str]]:
-        """Get debug ROIs for ALL tables."""
+        """Get debug ROIs for ALL tables + cell borders."""
         all_rois = []
+
+        # Draw cell borders first
+        for i, table in enumerate(self.tables):
+            if i >= self.num_tables:
+                break
+            x, y, w, h = table.region
+            if w > 0 and h > 0:
+                all_rois.append(((x, y, w, h), f"TABLE {i + 1}"))
+
+        # Then per-table ROIs
         for i in range(min(self.num_tables, len(self.tables))):
             all_rois.extend(self.get_debug_rois(frame, i))
         return all_rois
