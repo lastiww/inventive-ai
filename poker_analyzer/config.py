@@ -260,12 +260,6 @@ class Config:
     # Grid layout for multi-table (set by launcher)
     grid_cols: int = 1   # e.g. 2 for "2x2"
     grid_rows: int = 1   # e.g. 2 for "2x2"
-    grid_gap_x: int = 0        # horizontal gap between tables (pixels)
-    grid_gap_y: int = 0        # vertical gap between tables (pixels)
-    grid_width_pct: int = 100  # table width adjustment (80-120%)
-    grid_height_pct: int = 100 # table height adjustment (80-120%)
-    grid_shift_x: int = 0     # shift all tables left/right (pixels)
-    grid_shift_y: int = 0     # shift all tables up/down (pixels)
 
     @property
     def site_roi(self) -> SiteROI:

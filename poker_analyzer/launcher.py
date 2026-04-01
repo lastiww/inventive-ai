@@ -2,13 +2,15 @@
 
 The window stays open after START as a control panel.
 The transparent overlay is drawn on the right monitor on top of RenderColorQC.
-OCR runs in a background thread.
+
+Two separate loops:
+  - _draw_step: redraws debug rectangles every 100ms (fast, no OCR)
+  - _ocr_step:  runs OCR + solver every 500ms (heavy)
 """
 
 import os
 import subprocess
 import sys
-import threading
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog
@@ -33,14 +35,14 @@ class LauncherWindow:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        w, h = 500, 780
+        w, h = 520, 820
         sx = (self.root.winfo_screenwidth() - w) // 2
         sy = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{sx}+{sy}")
 
         self._running = False
         self._analyzer = None
-        self._ocr_thread = None
+        self._last_frame = None  # cached frame for fast rectangle redraw
 
         self._build_config_ui()
         self._build_control_ui()
@@ -105,26 +107,6 @@ class LauncherWindow:
         ).grid(row=row, column=1, sticky="w", pady=4)
         row += 1
 
-        # --- Grid adjustment sliders ---
-        sliders = [
-            ("Gap X (px) :",      "gap_x_var",      0, 200, 0),
-            ("Gap Y (px) :",      "gap_y_var",      0, 200, 0),
-            ("Largeur (%%) :",    "width_pct_var",  30, 200, 100),
-            ("Hauteur (%%) :",    "height_pct_var", 30, 200, 100),
-            ("Décalage X :",      "shift_x_var",   -500, 500, 0),
-            ("Décalage Y :",      "shift_y_var",   -500, 500, 0),
-        ]
-        for label_text, var_name, from_, to_, default in sliders:
-            self._label(self.config_frame, label_text, row)
-            var = tk.IntVar(value=default)
-            setattr(self, var_name, var)
-            tk.Scale(
-                self.config_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
-                variable=var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
-                highlightthickness=0, length=160, font=("Consolas", 8),
-            ).grid(row=row, column=1, sticky="w", pady=1)
-            row += 1
-
         self._label(self.config_frame, "TexasSolver :", row)
         sf = tk.Frame(self.config_frame, bg=BG)
         sf.grid(row=row, column=1, sticky="w", pady=4)
@@ -153,64 +135,89 @@ class LauncherWindow:
     # ─── Control UI ───
 
     def _build_control_ui(self):
-        self.control_frame = tk.Frame(self.root, bg=BG, padx=30, pady=20)
+        self.control_frame = tk.Frame(self.root, bg=BG, padx=20, pady=10)
 
         tk.Label(
             self.control_frame, text="POKER GTO ANALYZER",
-            font=("Consolas", 16, "bold"), fg=HEADER_FG, bg=BG, pady=10,
+            font=("Consolas", 16, "bold"), fg=HEADER_FG, bg=BG, pady=5,
         ).pack()
 
         self.status_var = tk.StringVar(value="")
         tk.Label(
             self.control_frame, textvariable=self.status_var,
             font=("Consolas", 10), fg="#888", bg=BG,
-        ).pack(pady=5)
+        ).pack(pady=3)
+
+        # Buttons row
+        btn_frame = tk.Frame(self.control_frame, bg=BG)
+        btn_frame.pack(fill=tk.X, pady=5)
 
         self.debug_var = tk.BooleanVar(value=False)
         self.debug_btn = tk.Button(
-            self.control_frame, text="DEBUG OCR: OFF",
+            btn_frame, text="DEBUG: OFF",
             command=self._toggle_debug,
             bg=BUTTON_BG, fg=FG, activebackground=BUTTON_ACTIVE,
-            font=("Consolas", 12, "bold"), width=25, height=2,
+            font=("Consolas", 10, "bold"), width=14, height=1,
         )
-        self.debug_btn.pack(pady=8)
+        self.debug_btn.pack(side=tk.LEFT, padx=3)
 
         self.exploit_var = tk.BooleanVar(value=True)
         self.exploit_btn = tk.Button(
-            self.control_frame, text="MODE: EXP + GTO",
+            btn_frame, text="EXP+GTO",
             command=self._toggle_exploit,
             bg=BUTTON_BG, fg=FG, activebackground=BUTTON_ACTIVE,
-            font=("Consolas", 12, "bold"), width=25, height=2,
+            font=("Consolas", 10, "bold"), width=14, height=1,
         )
-        self.exploit_btn.pack(pady=8)
+        self.exploit_btn.pack(side=tk.LEFT, padx=3)
 
-        # ─── Live adjustment sliders ───
+        # Grid selector (live)
+        grid_frame = tk.Frame(self.control_frame, bg=BG)
+        grid_frame.pack(fill=tk.X, pady=5)
+        tk.Label(grid_frame, text="Grid:", font=("Consolas", 9, "bold"), fg=FG, bg=BG).pack(side=tk.LEFT, padx=4)
+        self.live_grid_var = tk.StringVar(value="1x1")
+        grid_combo = ttk.Combobox(
+            grid_frame, textvariable=self.live_grid_var,
+            values=["1x1", "1x2", "2x1", "2x2", "2x3", "3x2"],
+            state="readonly", width=6,
+        )
+        grid_combo.pack(side=tk.LEFT, padx=4)
+        grid_combo.bind("<<ComboboxSelected>>", self._on_grid_select)
+
+        # ─── CALIBRATION SLIDERS ───
         tk.Label(
-            self.control_frame, text="AJUSTEMENTS",
-            font=("Consolas", 10, "bold"), fg="#888", bg=BG,
-        ).pack(pady=(10, 2))
+            self.control_frame, text="─── CALIBRATION ───",
+            font=("Consolas", 10, "bold"), fg=HEADER_FG, bg=BG,
+        ).pack(pady=(8, 2))
 
-        adj_frame = tk.Frame(self.control_frame, bg=BG)
-        adj_frame.pack(fill=tk.X)
+        # Create IntVar for each slider
+        self.scale_var = tk.IntVar(value=100)
+        self.gap_x_var = tk.IntVar(value=0)
+        self.gap_y_var = tk.IntVar(value=0)
+        self.top_offset_var = tk.IntVar(value=0)
+        self.offset_x_var = tk.IntVar(value=0)
+        self.offset_y_var = tk.IntVar(value=0)
 
-        live_sliders = [
-            ("Gap X",       self.gap_x_var,      0, 200),
-            ("Gap Y",       self.gap_y_var,      0, 200),
-            ("Largeur %",   self.width_pct_var,  30, 200),
-            ("Hauteur %",   self.height_pct_var, 30, 200),
-            ("Décalage X",  self.shift_x_var,   -500, 500),
-            ("Décalage Y",  self.shift_y_var,   -500, 500),
+        slider_frame = tk.Frame(self.control_frame, bg=BG)
+        slider_frame.pack(fill=tk.X)
+
+        sliders = [
+            ("Table Scale %", self.scale_var,      30, 200),
+            ("Gap X %",       self.gap_x_var,       0, 50),
+            ("Gap Y %",       self.gap_y_var,       0, 50),
+            ("Top Offset px", self.top_offset_var,  0, 100),
+            ("Offset X %",    self.offset_x_var,  -30, 30),
+            ("Offset Y %",    self.offset_y_var,  -30, 30),
         ]
-        for i, (label, var, from_, to_) in enumerate(live_sliders):
-            tk.Label(adj_frame, text=label, font=("Consolas", 8), fg=FG, bg=BG
-                     ).grid(row=i, column=0, sticky="e", padx=4)
+        for i, (label, var, from_, to_) in enumerate(sliders):
+            tk.Label(slider_frame, text=label, font=("Consolas", 8), fg=FG, bg=BG,
+                     anchor="e", width=14).grid(row=i, column=0, sticky="e", padx=2)
             tk.Scale(
-                adj_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
-                variable=var,
-                bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0,
-                length=140, font=("Consolas", 7),
-            ).grid(row=i, column=1, pady=0)
+                slider_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
+                variable=var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
+                highlightthickness=0, length=180, font=("Consolas", 7),
+            ).grid(row=i, column=1, pady=0, padx=2)
 
+        # STOP button
         tk.Button(
             self.control_frame, text="STOP",
             command=self._stop,
@@ -240,11 +247,13 @@ class LauncherWindow:
 
     def _browse_rc(self):
         p = filedialog.askopenfilename(title="Select RenderColorQC", filetypes=[("Executable", "*.exe")])
-        if p: self.rc_path_var.set(p)
+        if p:
+            self.rc_path_var.set(p)
 
     def _browse_solver(self):
         p = filedialog.askopenfilename(title="Select TexasSolver", filetypes=[("Executable", "*.exe")])
-        if p: self.solver_var.set(p)
+        if p:
+            self.solver_var.set(p)
 
     def _launch_rendercolor(self):
         rc = self.rc_path_var.get()
@@ -255,6 +264,22 @@ class LauncherWindow:
                              creationflags=0x00000008 if sys.platform == "win32" else 0)
         except Exception as e:
             print(f"[ERROR] {e}")
+
+    def _on_grid_select(self, _=None):
+        """Live grid change from control panel."""
+        grid_str = self.live_grid_var.get()
+        if self._analyzer and self._analyzer.multi:
+            try:
+                cols, rows = grid_str.split("x")
+                m = self._analyzer.multi
+                m.cols = int(cols)
+                m.rows = int(rows)
+                m.num_tables = m.cols * m.rows
+                while len(m.tables) < m.num_tables:
+                    from poker_analyzer.multi_table import TableInstance
+                    m.tables.append(TableInstance(len(m.tables), self._analyzer.config))
+            except ValueError:
+                pass
 
     # ─── Start / Stop ───
 
@@ -272,7 +297,6 @@ class LauncherWindow:
         except ValueError:
             width, height = 1920, 1080
 
-        # Parse grid layout (e.g. "2x3" → cols=2, rows=3)
         grid_str = self.grid_var.get()
         try:
             cols, rows = grid_str.split("x")
@@ -287,12 +311,6 @@ class LauncherWindow:
         config = Config(site=site, debug_ocr=self.debug_var.get())
         config.grid_cols = grid_cols
         config.grid_rows = grid_rows
-        config.grid_gap_x = self.gap_x_var.get()
-        config.grid_gap_y = self.gap_y_var.get()
-        config.grid_width_pct = self.width_pct_var.get()
-        config.grid_height_pct = self.height_pct_var.get()
-        config.grid_shift_x = self.shift_x_var.get()
-        config.grid_shift_y = self.shift_y_var.get()
         config.capture.rendercolor_x = rcx
         config.capture.rendercolor_y = rcy
         config.capture.width = width
@@ -302,6 +320,9 @@ class LauncherWindow:
         config.window.overlay_y = rcy
         config.window.overlay_width = width
         config.window.overlay_height = height
+
+        # Sync grid selector
+        self.live_grid_var.set(self.grid_var.get())
 
         # Switch to control panel
         self.config_frame.pack_forget()
@@ -326,7 +347,6 @@ class LauncherWindow:
             width=config.window.overlay_width,
             height=config.window.overlay_height,
         )
-        # Use Toplevel instead of new Tk
         self._analyzer._overlay.root = tk.Toplevel(self.root)
         overlay_root = self._analyzer._overlay.root
         overlay_root.title("GTO Overlay")
@@ -344,7 +364,7 @@ class LauncherWindow:
             GWL_EXSTYLE = -20
             style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             ctypes.windll.user32.SetWindowLongW(
-                hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20  # WS_EX_LAYERED | WS_EX_TRANSPARENT
+                hwnd, GWL_EXSTYLE, style | 0x80000 | 0x20
             )
         except Exception:
             pass
@@ -357,34 +377,63 @@ class LauncherWindow:
         self._analyzer._overlay._width = width
         self._analyzer._overlay._height = height
 
-        # Start OCR loop with periodic Tk callback
-        self._ocr_step()
+        # Start two separate loops
+        self._draw_step()   # fast: redraw rectangles every 100ms
+        self._ocr_step()    # slow: OCR every 500ms
+
+    # ─── Fast draw loop (100ms) — rectangles only ───
+
+    def _draw_step(self):
+        """Redraw debug rectangles from cached frame. No OCR."""
+        if not self._running:
+            return
+
+        try:
+            self._sync_sliders()
+
+            if self._analyzer and self._analyzer._overlay and self._analyzer.config.debug_ocr:
+                if self._last_frame is not None:
+                    rois = self._analyzer.multi.get_all_debug_rois(self._last_frame)
+                    self._analyzer._overlay.update_debug_rois(rois)
+                else:
+                    # No frame yet — show cell borders only using overlay dimensions
+                    ow = self._analyzer._overlay._width
+                    oh = self._analyzer._overlay._height
+                    rois = self._analyzer.multi.get_cell_borders(ow, oh)
+                    self._analyzer._overlay.update_debug_rois(rois)
+            elif self._analyzer and self._analyzer._overlay:
+                self._analyzer._overlay.update_debug_rois(None)
+        except Exception as e:
+            print(f"[DRAW] {e}")
+
+        self.root.after(100, self._draw_step)
+
+    # ─── Slow OCR loop (500ms) — heavy processing ───
 
     def _ocr_step(self):
-        """One OCR step — called periodically by Tk mainloop."""
+        """Run OCR + solver. Called every 500ms."""
         if not self._running or not self._analyzer:
             return
 
         try:
-            self._analyzer_step()
+            self._ocr_process()
         except Exception as e:
-            print(f"[ERROR] {e}")
+            print(f"[OCR] {e}")
 
-        # Schedule next step (2000ms = 0.5 FPS — rectangles stay fixed between updates)
-        self.root.after(2000, self._ocr_step)
+        self.root.after(500, self._ocr_step)
 
-    def _analyzer_step(self):
-        """Single analysis step: capture → OCR → solve → update overlay."""
+    def _ocr_process(self):
+        """Capture frame → OCR → solve → update labels."""
         analyzer = self._analyzer
         if not analyzer:
             return
 
-        # Sync slider values (once per frame, not per pixel)
-        self._sync_grid_params()
-
         frame = analyzer.capture.read_frame()
         if frame is None:
             return
+
+        # Cache frame for fast rectangle redraw
+        self._last_frame = frame
 
         detected = analyzer.multi.update_tables(frame)
 
@@ -402,7 +451,6 @@ class LauncherWindow:
                 if opponent:
                     table.exploit_result = table.game_state.exploitative_result
 
-            # Update overlay labels
             if analyzer._overlay:
                 anchors = analyzer.multi.get_label_anchors(i)
                 analyzer._overlay.update_labels(
@@ -411,41 +459,37 @@ class LauncherWindow:
                     table.exploit_result if analyzer._show_exploit else None,
                 )
 
-        # Debug rects
-        if analyzer._overlay:
-            if analyzer.config.debug_ocr:
-                rois = analyzer.multi.get_all_debug_rois(frame)
-                analyzer._overlay.update_debug_rois(rois)
-            else:
-                analyzer._overlay.update_debug_rois(None)
+    # ─── Sync sliders → multi-table manager ───
 
-    def _sync_grid_params(self):
-        """Push slider values to multi-table manager (called once per OCR step)."""
-        if self._analyzer and self._analyzer.multi:
-            m = self._analyzer.multi
-            m.gap_x = self.gap_x_var.get()
-            m.gap_y = self.gap_y_var.get()
-            m.width_pct = self.width_pct_var.get()
-            m.height_pct = self.height_pct_var.get()
-            m.shift_x = self.shift_x_var.get()
-            m.shift_y = self.shift_y_var.get()
+    def _sync_sliders(self):
+        """Push slider values to multi-table manager."""
+        if not self._analyzer or not self._analyzer.multi:
+            return
+        m = self._analyzer.multi
+        m.scale_pct = self.scale_var.get()
+        m.gap_x_pct = self.gap_x_var.get()
+        m.gap_y_pct = self.gap_y_var.get()
+        m.top_offset = self.top_offset_var.get()
+        m.offset_x_pct = self.offset_x_var.get()
+        m.offset_y_pct = self.offset_y_var.get()
 
     def _toggle_debug(self):
         self.debug_var.set(not self.debug_var.get())
         on = self.debug_var.get()
-        self.debug_btn.config(text=f"DEBUG OCR: {'ON' if on else 'OFF'}")
+        self.debug_btn.config(text=f"DEBUG: {'ON' if on else 'OFF'}")
         if self._analyzer:
             self._analyzer.config.debug_ocr = on
 
     def _toggle_exploit(self):
         self.exploit_var.set(not self.exploit_var.get())
         on = self.exploit_var.get()
-        self.exploit_btn.config(text=f"MODE: {'EXP + GTO' if on else 'GTO ONLY'}")
+        self.exploit_btn.config(text=f"{'EXP+GTO' if on else 'GTO ONLY'}")
         if self._analyzer:
             self._analyzer._show_exploit = on
 
     def _stop(self):
         self._running = False
+        self._last_frame = None
         if self._analyzer and self._analyzer._overlay:
             self._analyzer._overlay.destroy()
             self._analyzer._overlay = None
