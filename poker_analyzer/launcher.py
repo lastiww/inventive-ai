@@ -33,7 +33,7 @@ class LauncherWindow:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        w, h = 500, 580
+        w, h = 500, 700
         sx = (self.root.winfo_screenwidth() - w) // 2
         sy = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{sx}+{sy}")
@@ -97,6 +97,44 @@ class LauncherWindow:
         ).grid(row=row, column=1, sticky="w", pady=4)
         row += 1
 
+        self._label(self.config_frame, "Tables :", row)
+        self.grid_var = tk.StringVar(value="1x1")
+        ttk.Combobox(
+            self.config_frame, textvariable=self.grid_var,
+            values=["1x1", "1x2", "2x1", "2x2", "2x3", "3x2"], state="readonly", width=20,
+        ).grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        # Gap X — horizontal space between tables (pixels)
+        self._label(self.config_frame, "Gap X (px) :", row)
+        self.gap_x_var = tk.IntVar(value=0)
+        tk.Scale(
+            self.config_frame, from_=0, to=60, orient=tk.HORIZONTAL,
+            variable=self.gap_x_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
+            highlightthickness=0, length=160, font=("Consolas", 8),
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        # Gap Y — vertical space between tables (pixels)
+        self._label(self.config_frame, "Gap Y (px) :", row)
+        self.gap_y_var = tk.IntVar(value=0)
+        tk.Scale(
+            self.config_frame, from_=0, to=60, orient=tk.HORIZONTAL,
+            variable=self.gap_y_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
+            highlightthickness=0, length=160, font=("Consolas", 8),
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        # Padding — shrink each table rectangle inward (pixels)
+        self._label(self.config_frame, "Padding (px) :", row)
+        self.padding_var = tk.IntVar(value=0)
+        tk.Scale(
+            self.config_frame, from_=0, to=40, orient=tk.HORIZONTAL,
+            variable=self.padding_var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
+            highlightthickness=0, length=160, font=("Consolas", 8),
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
         self._label(self.config_frame, "TexasSolver :", row)
         sf = tk.Frame(self.config_frame, bg=BG)
         sf.grid(row=row, column=1, sticky="w", pady=4)
@@ -156,12 +194,45 @@ class LauncherWindow:
         )
         self.exploit_btn.pack(pady=8)
 
+        # ─── Live adjustment sliders ───
+        tk.Label(
+            self.control_frame, text="AJUSTEMENTS",
+            font=("Consolas", 10, "bold"), fg="#888", bg=BG,
+        ).pack(pady=(10, 2))
+
+        adj_frame = tk.Frame(self.control_frame, bg=BG)
+        adj_frame.pack(fill=tk.X)
+
+        tk.Label(adj_frame, text="Gap X", font=("Consolas", 8), fg=FG, bg=BG).grid(row=0, column=0, sticky="e", padx=4)
+        self.live_gap_x = tk.Scale(
+            adj_frame, from_=0, to=60, orient=tk.HORIZONTAL,
+            variable=self.gap_x_var, command=self._on_grid_change,
+            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
+        )
+        self.live_gap_x.grid(row=0, column=1, pady=1)
+
+        tk.Label(adj_frame, text="Gap Y", font=("Consolas", 8), fg=FG, bg=BG).grid(row=1, column=0, sticky="e", padx=4)
+        self.live_gap_y = tk.Scale(
+            adj_frame, from_=0, to=60, orient=tk.HORIZONTAL,
+            variable=self.gap_y_var, command=self._on_grid_change,
+            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
+        )
+        self.live_gap_y.grid(row=1, column=1, pady=1)
+
+        tk.Label(adj_frame, text="Padding", font=("Consolas", 8), fg=FG, bg=BG).grid(row=2, column=0, sticky="e", padx=4)
+        self.live_padding = tk.Scale(
+            adj_frame, from_=0, to=40, orient=tk.HORIZONTAL,
+            variable=self.padding_var, command=self._on_grid_change,
+            bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0, length=140, font=("Consolas", 7),
+        )
+        self.live_padding.grid(row=2, column=1, pady=1)
+
         tk.Button(
             self.control_frame, text="STOP",
             command=self._stop,
             bg=RED, fg="white", activebackground="#6a1a1a",
             font=("Consolas", 12, "bold"), width=25, height=2,
-        ).pack(pady=15)
+        ).pack(pady=10)
 
     # ─── Helpers ───
 
@@ -217,11 +288,24 @@ class LauncherWindow:
         except ValueError:
             width, height = 1920, 1080
 
+        # Parse grid layout (e.g. "2x3" → cols=2, rows=3)
+        grid_str = self.grid_var.get()
+        try:
+            cols, rows = grid_str.split("x")
+            grid_cols, grid_rows = int(cols), int(rows)
+        except ValueError:
+            grid_cols, grid_rows = 1, 1
+
         if self.auto_launch_var.get():
             self._launch_rendercolor()
 
         from poker_analyzer.config import Config
         config = Config(site=site, debug_ocr=self.debug_var.get())
+        config.grid_cols = grid_cols
+        config.grid_rows = grid_rows
+        config.grid_gap_x = self.gap_x_var.get()
+        config.grid_gap_y = self.gap_y_var.get()
+        config.grid_padding = self.padding_var.get()
         config.capture.rendercolor_x = rcx
         config.capture.rendercolor_y = rcy
         config.capture.width = width
@@ -235,7 +319,8 @@ class LauncherWindow:
         # Switch to control panel
         self.config_frame.pack_forget()
         self.control_frame.pack(fill=tk.BOTH, expand=True)
-        self.status_var.set(f"Running — {site} — {width}x{height}")
+        n_tables = grid_cols * grid_rows
+        self.status_var.set(f"Running — {site} — {width}x{height} — {n_tables} table(s)")
         self._running = True
 
         # Create analyzer
@@ -311,13 +396,10 @@ class LauncherWindow:
         if frame is None:
             return
 
-        fh, fw = frame.shape[:2]
-
-        # Use full frame (no sub-frame cropping)
         detected = analyzer.multi.update_tables(frame)
 
-        for full_frame, table in detected:
-            table.game_state = table.parser.parse_frame(full_frame)
+        for i, (table_frame, table) in enumerate(detected):
+            table.game_state = table.parser.parse_frame(table_frame)
 
             now = time.time()
             if analyzer._detect_state_change(table) and (now - table.last_solve_time) > 2.0:
@@ -332,20 +414,27 @@ class LauncherWindow:
 
             # Update overlay labels
             if analyzer._overlay:
-                anchors = analyzer.multi.get_label_anchors()
+                anchors = analyzer.multi.get_label_anchors(i)
                 analyzer._overlay.update_labels(
                     anchors, table.game_state,
                     table.gto_result,
                     table.exploit_result if analyzer._show_exploit else None,
                 )
 
-        # Debug rects — only on full frame
+        # Debug rects
         if analyzer._overlay:
             if analyzer.config.debug_ocr:
-                rois = analyzer.multi.get_debug_rois(frame)
+                rois = analyzer.multi.get_all_debug_rois(frame)
                 analyzer._overlay.update_debug_rois(rois)
             else:
                 analyzer._overlay.update_debug_rois(None)
+
+    def _on_grid_change(self, _=None):
+        """Live update gap/padding when sliders move."""
+        if self._analyzer and self._analyzer.multi:
+            self._analyzer.multi.gap_x = self.gap_x_var.get()
+            self._analyzer.multi.gap_y = self.gap_y_var.get()
+            self._analyzer.multi.padding = self.padding_var.get()
 
     def _toggle_debug(self):
         self.debug_var.set(not self.debug_var.get())

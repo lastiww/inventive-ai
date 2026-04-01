@@ -47,11 +47,10 @@ class PokerAnalyzer:
                     time.sleep(0.1)
                     continue
 
-                fh, fw = frame.shape[:2]
                 detected = self.multi.update_tables(frame)
 
-                for sub_frame, table in detected:
-                    table.game_state = table.parser.parse_frame(sub_frame)
+                for i, (table_frame, table) in enumerate(detected):
+                    table.game_state = table.parser.parse_frame(table_frame)
 
                     if self._detect_state_change(table):
                         now = time.time()
@@ -66,7 +65,7 @@ class PokerAnalyzer:
                             table.exploit_result = table.game_state.exploitative_result
 
                     if self._overlay:
-                        anchors = self.multi.get_label_anchors_for_table(table, fw, fh)
+                        anchors = self.multi.get_label_anchors(i)
                         self._overlay.update_labels(
                             anchors, table.game_state,
                             table.gto_result,

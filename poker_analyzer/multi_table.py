@@ -1,12 +1,10 @@
-"""Multi-table manager — detects poker tables in the captured frame.
+"""Multi-table manager — fixed grid layout with gap/padding controls.
 
-Uses the FULL frame for OCR (no sub-frame cropping).
-Table detection only runs every N seconds to avoid lag.
+The user selects a grid (1x1, 1x2, 2x2, etc.) in the launcher
+and adjusts Gap X, Gap Y, and Padding sliders.
+The captured frame is divided into cells accordingly.
 """
 
-import time
-
-import cv2
 import numpy as np
 
 from poker_analyzer.config import Config
@@ -36,79 +34,131 @@ class TableInstance:
         self.last_pot: float = 0.0
         self.last_solve_time: float = 0.0
 
+        # Cell region in the full frame (x, y, w, h)
+        self.region: tuple[int, int, int, int] = (0, 0, 0, 0)
+
 
 class MultiTableManager:
-    """Manages poker table(s) — uses full frame, no cropping."""
+    """Manages tables using a fixed grid layout with gap/padding."""
 
-    def __init__(self, config: Config, max_tables: int = 6):
+    def __init__(self, config: Config):
         self.config = config
-        self.max_tables = max_tables
-        self.tables: list[TableInstance] = []
-        self._table_count: int = 1
-        self._last_detect_time: float = 0.0
-        self._detect_interval: float = 3.0  # re-detect every 3 seconds
+        self.cols = max(config.grid_cols, 1)
+        self.rows = max(config.grid_rows, 1)
+        self.gap_x = config.grid_gap_x    # pixels between tables horizontally
+        self.gap_y = config.grid_gap_y    # pixels between tables vertically
+        self.padding = config.grid_padding  # shrink each cell inward (pixels)
+        self.num_tables = self.cols * self.rows
 
-        # Always create at least 1 table
-        self.tables.append(TableInstance(0, config))
+        self.tables: list[TableInstance] = []
+        for i in range(self.num_tables):
+            self.tables.append(TableInstance(i, config))
+
+    def _compute_cells(self, fw: int, fh: int) -> list[tuple[int, int, int, int]]:
+        """Divide the frame into grid cells with gaps and padding.
+
+        Layout:
+          gap_x is the total horizontal space between columns.
+          gap_y is the total vertical space between rows.
+          padding shrinks each cell inward on all 4 sides.
+
+        Returns list of (x, y, w, h) for each cell.
+        """
+        # Total gap space
+        total_gap_x = self.gap_x * (self.cols - 1) if self.cols > 1 else 0
+        total_gap_y = self.gap_y * (self.rows - 1) if self.rows > 1 else 0
+
+        # Cell size before padding
+        cell_w = (fw - total_gap_x) // self.cols
+        cell_h = (fh - total_gap_y) // self.rows
+
+        cells = []
+        for r in range(self.rows):
+            for c in range(self.cols):
+                x = c * (cell_w + self.gap_x) + self.padding
+                y = r * (cell_h + self.gap_y) + self.padding
+                w = cell_w - self.padding * 2
+                h = cell_h - self.padding * 2
+                # Clamp
+                w = max(w, 10)
+                h = max(h, 10)
+                cells.append((x, y, w, h))
+        return cells
 
     def update_tables(self, frame: np.ndarray) -> list[tuple[np.ndarray, TableInstance]]:
-        """Return full frame paired with table instances.
+        """Split frame into grid cells and return sub-frames.
 
-        No sub-frame extraction — the full frame is used directly.
-        Table count is re-evaluated periodically (every 3 seconds).
+        For 1x1 with no padding: full frame, no cropping.
+        Otherwise: one sub-frame per cell.
         """
-        now = time.time()
+        fh, fw = frame.shape[:2]
 
-        # Re-detect table count periodically (not every frame)
-        if now - self._last_detect_time > self._detect_interval:
-            self._last_detect_time = now
-            count = self._count_tables(frame)
-            if count != self._table_count:
-                self._table_count = count
-                # Ensure enough table instances
-                while len(self.tables) < count:
-                    self.tables.append(TableInstance(len(self.tables), self.config))
+        # Single table, no padding → use full frame directly
+        if self.num_tables == 1 and self.padding == 0:
+            self.tables[0].region = (0, 0, fw, fh)
+            return [(frame, self.tables[0])]
 
-        # For now: single table = full frame
-        # (multi-table tiling will be added later)
+        cells = self._compute_cells(fw, fh)
         results = []
-        for i in range(min(self._table_count, len(self.tables))):
-            results.append((frame, self.tables[i]))
-
+        for i, (x, y, w, h) in enumerate(cells):
+            if i >= len(self.tables):
+                break
+            self.tables[i].region = (x, y, w, h)
+            sub = frame[y:y + h, x:x + w]
+            results.append((sub, self.tables[i]))
         return results
 
-    def _count_tables(self, frame: np.ndarray) -> int:
-        """Count how many poker tables are visible via green felt detection."""
-        fh, fw = frame.shape[:2]
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        lower = np.array([30, 50, 50])
-        upper = np.array([85, 255, 255])
-        mask = cv2.inRange(hsv, lower, upper)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        min_area = fh * fw * 0.03
-        count = 0
-        for cnt in contours:
-            if cv2.contourArea(cnt) >= min_area:
-                x, y, w, h = cv2.boundingRect(cnt)
-                ratio = w / max(h, 1)
-                if 1.2 < ratio < 4.0:
-                    count += 1
-
-        return max(count, 1)
-
-    def get_label_anchors(self) -> list[tuple[float, float]]:
-        """Get overlay label anchors (normalized 0-1, full frame)."""
-        return self.config.site_roi.player_label_anchors
-
-    def get_debug_rois(self, frame: np.ndarray) -> list[tuple[tuple[int, int, int, int], str]]:
-        """Get debug ROI rectangles in pixel coordinates for the full frame."""
-        if not self.tables:
+    def get_label_anchors(self, table_index: int = 0) -> list[tuple[float, float]]:
+        """Get overlay label anchors for a table (normalized to full frame)."""
+        anchors = self.config.site_roi.player_label_anchors
+        if not anchors:
             return []
-        return self.tables[0].parser.get_debug_rois(frame)
+
+        # Single table no padding → raw anchors
+        if self.num_tables == 1 and self.padding == 0:
+            return anchors
+
+        table = self.tables[table_index]
+        x, y, w, h = table.region
+
+        # We need the full frame dimensions to normalize
+        # Estimate from grid: total width = cols * (cell_w + gap) - gap
+        cell_w_padded = w + self.padding * 2
+        cell_h_padded = h + self.padding * 2
+        full_w = self.cols * cell_w_padded + self.gap_x * (self.cols - 1)
+        full_h = self.rows * cell_h_padded + self.gap_y * (self.rows - 1)
+
+        result = []
+        for ax, ay in anchors:
+            abs_x = x + ax * w
+            abs_y = y + ay * h
+            result.append((abs_x / full_w, abs_y / full_h))
+        return result
+
+    def get_debug_rois(self, frame: np.ndarray, table_index: int = 0) -> list[tuple[tuple[int, int, int, int], str]]:
+        """Get debug ROI rectangles in pixel coordinates."""
+        if table_index >= len(self.tables):
+            return []
+        table = self.tables[table_index]
+
+        # Single table no padding → full frame coords
+        if self.num_tables == 1 and self.padding == 0:
+            return table.parser.get_debug_rois(frame)
+
+        # Multi-table → local ROIs offset to full frame
+        x, y, w, h = table.region
+        sub = frame[y:y + h, x:x + w]
+        local_rois = table.parser.get_debug_rois(sub)
+        tid = table.table_id + 1
+
+        result = []
+        for (rx, ry, rw, rh), label in local_rois:
+            result.append(((rx + x, ry + y, rw, rh), f"T{tid} {label}"))
+        return result
+
+    def get_all_debug_rois(self, frame: np.ndarray) -> list[tuple[tuple[int, int, int, int], str]]:
+        """Get debug ROIs for ALL tables."""
+        all_rois = []
+        for i in range(min(self.num_tables, len(self.tables))):
+            all_rois.extend(self.get_debug_rois(frame, i))
+        return all_rois
