@@ -189,8 +189,9 @@ class LauncherWindow:
             font=("Consolas", 10, "bold"), fg=HEADER_FG, bg=BG,
         ).pack(pady=(8, 2))
 
-        # Create IntVar for each slider
+        # Create vars for each slider
         self.scale_var = tk.IntVar(value=100)
+        self.ratio_var = tk.DoubleVar(value=1.28)
         self.gap_x_var = tk.IntVar(value=0)
         self.gap_y_var = tk.IntVar(value=0)
         self.top_offset_var = tk.IntVar(value=0)
@@ -200,7 +201,8 @@ class LauncherWindow:
         slider_frame = tk.Frame(self.control_frame, bg=BG)
         slider_frame.pack(fill=tk.X)
 
-        sliders = [
+        # Integer sliders
+        int_sliders = [
             ("Table Scale %", self.scale_var,      30, 200),
             ("Gap X %",       self.gap_x_var,       0, 50),
             ("Gap Y %",       self.gap_y_var,       0, 50),
@@ -208,14 +210,26 @@ class LauncherWindow:
             ("Offset X %",    self.offset_x_var,  -30, 30),
             ("Offset Y %",    self.offset_y_var,  -30, 30),
         ]
-        for i, (label, var, from_, to_) in enumerate(sliders):
+        row_i = 0
+        for label, var, from_, to_ in int_sliders:
             tk.Label(slider_frame, text=label, font=("Consolas", 8), fg=FG, bg=BG,
-                     anchor="e", width=14).grid(row=i, column=0, sticky="e", padx=2)
+                     anchor="e", width=14).grid(row=row_i, column=0, sticky="e", padx=2)
             tk.Scale(
                 slider_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
                 variable=var, bg=BG, fg=FG, troughcolor=ENTRY_BG,
                 highlightthickness=0, length=180, font=("Consolas", 7),
-            ).grid(row=i, column=1, pady=0, padx=2)
+            ).grid(row=row_i, column=1, pady=0, padx=2)
+            row_i += 1
+
+        # Ratio slider (float, 1.10 to 1.90, step 0.01)
+        tk.Label(slider_frame, text="Table Ratio", font=("Consolas", 8), fg=FG, bg=BG,
+                 anchor="e", width=14).grid(row=row_i, column=0, sticky="e", padx=2)
+        tk.Scale(
+            slider_frame, from_=1.10, to=1.90, orient=tk.HORIZONTAL,
+            variable=self.ratio_var, resolution=0.01,
+            bg=BG, fg=FG, troughcolor=ENTRY_BG,
+            highlightthickness=0, length=180, font=("Consolas", 7),
+        ).grid(row=row_i, column=1, pady=0, padx=2)
 
         # STOP button
         tk.Button(
@@ -467,6 +481,7 @@ class LauncherWindow:
             return
         m = self._analyzer.multi
         m.scale_pct = self.scale_var.get()
+        m.table_ratio = self.ratio_var.get()
         m.gap_x_pct = self.gap_x_var.get()
         m.gap_y_pct = self.gap_y_var.get()
         m.top_offset = self.top_offset_var.get()

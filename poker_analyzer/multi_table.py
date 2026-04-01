@@ -40,9 +40,6 @@ class TableInstance:
 class MultiTableManager:
     """Manages tables using a fixed grid layout."""
 
-    # CoinPoker table width/height ratio (constant, adjustable later)
-    TABLE_RATIO = 1.79
-
     def __init__(self, config: Config):
         self.config = config
         self.cols = max(config.grid_cols, 1)
@@ -51,6 +48,7 @@ class MultiTableManager:
 
         # Slider values (updated live from launcher)
         self.scale_pct = 100      # table scale %
+        self.table_ratio = 1.28   # width/height ratio (adjustable via slider)
         self.gap_x_pct = 0.0      # gap X as % of cell width
         self.gap_y_pct = 0.0      # gap Y as % of cell height
         self.top_offset = 0       # top offset in pixels (title bar)
@@ -79,7 +77,7 @@ class MultiTableManager:
         # Scaled table dimensions (width from scale, height from ratio)
         scale = self.scale_pct / 100.0
         rect_w = int(raw_w * scale)
-        rect_h = int(rect_w / self.TABLE_RATIO)
+        rect_h = int(rect_w / self.table_ratio)
 
         # Gap in pixels (% of raw cell)
         gx = raw_w * self.gap_x_pct / 100.0
