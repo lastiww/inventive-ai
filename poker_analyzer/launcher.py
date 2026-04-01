@@ -206,7 +206,7 @@ class LauncherWindow:
                      ).grid(row=i, column=0, sticky="e", padx=4)
             tk.Scale(
                 adj_frame, from_=from_, to=to_, orient=tk.HORIZONTAL,
-                variable=var, command=self._on_grid_change,
+                variable=var,
                 bg=BG, fg=FG, troughcolor=ENTRY_BG, highlightthickness=0,
                 length=140, font=("Consolas", 7),
             ).grid(row=i, column=1, pady=0)
@@ -370,14 +370,17 @@ class LauncherWindow:
         except Exception as e:
             print(f"[ERROR] {e}")
 
-        # Schedule next step (100ms = 10 FPS)
-        self.root.after(100, self._ocr_step)
+        # Schedule next step (200ms = 5 FPS — keeps UI responsive)
+        self.root.after(200, self._ocr_step)
 
     def _analyzer_step(self):
         """Single analysis step: capture → OCR → solve → update overlay."""
         analyzer = self._analyzer
         if not analyzer:
             return
+
+        # Sync slider values (once per frame, not per pixel)
+        self._sync_grid_params()
 
         frame = analyzer.capture.read_frame()
         if frame is None:
@@ -416,8 +419,8 @@ class LauncherWindow:
             else:
                 analyzer._overlay.update_debug_rois(None)
 
-    def _on_grid_change(self, _=None):
-        """Live update all grid params when sliders move."""
+    def _sync_grid_params(self):
+        """Push slider values to multi-table manager (called once per OCR step)."""
         if self._analyzer and self._analyzer.multi:
             m = self._analyzer.multi
             m.gap_x = self.gap_x_var.get()
